@@ -31,7 +31,7 @@ export interface SpriteManifest {
   sprites: Record<string, SpriteSheet>;
 }
 
-export const manifest = manifestJson as SpriteManifest;
+export const manifest = manifestJson as unknown as SpriteManifest;
 
 export function spriteUrl(sheet: SpriteSheet): string {
   return `/sprites/${sheet.file}${manifest.build ? `?v=${manifest.build}` : ""}`;

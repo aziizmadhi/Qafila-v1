@@ -51,7 +51,7 @@ export default function ProfilePage() {
               <Stat label="أبعد مسافة" value={<Km value={p.bestKm} />} />
               <Stat label="الرحلات اليومية" value={<span className="km">{p.journeys}</span>} />
               <Stat label="متوسط المسافة" value={<Km value={p.averageKm} />} />
-              <Stat label="أفضل مرتبة" value={`${journeyTier(p.bestKm).emoji} ${journeyTier(p.bestKm).name}`} />
+              <Stat label="أفضل مرتبة" value={journeyTier(p.bestKm).name} />
             </dl>
           </Panel>
           <AccountPanel isAnonymous={p.isAnonymous} email={p.email} />

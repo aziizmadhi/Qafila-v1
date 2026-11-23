@@ -22,7 +22,7 @@ export interface Tier {
  */
 export const TIERS: readonly Tier[] = [
   { id: "camp", name: "المخيم", emoji: "⛺", minScore: 10, minKm: 0 },
-  { id: "dunes", name: "الكثبان", emoji: "🏜️", minScore: 80, minKm: 350 },
+  { id: "dunes", name: "الكثبان", emoji: "🐪", minScore: 80, minKm: 350 },
   { id: "mirage", name: "السراب", emoji: "🌫️", minScore: 90, minKm: 480 },
   { id: "oasis", name: "الواحة", emoji: "🌴", minScore: 96, minKm: 570 },
   { id: "star", name: "نجم الصحراء", emoji: "🌟", minScore: 99, minKm: 640 },

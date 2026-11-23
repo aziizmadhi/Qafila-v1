@@ -6,8 +6,9 @@ import type { AnswerResult, RunMode, RunState } from "@/lib/api-types";
 import { categoryName } from "@/lib/categories";
 import { ApiError, api } from "@/lib/client/api";
 import { formatDate } from "@/lib/client/format";
-import { MISS, answerTier, tierById } from "@/lib/tiers";
+import { tierById } from "@/lib/tiers";
 import { Progress } from "./Progress";
+import { TierIcon } from "./TierIcon";
 import { Button, ButtonLink, ErrorNote, Km, Loading, Panel } from "./ui";
 import { Waterskin } from "./Waterskin";
 
@@ -285,9 +286,7 @@ function ResultCard({ result, traveling, onNext }: { result: AnswerResult; trave
           </>
         ) : result.correct ? (
           <>
-            <p className="text-3xl" aria-hidden>
-              {tier?.emoji ?? answerTier(result.score)?.emoji}
-            </p>
+            <TierIcon score={result.score} scale={4} className="mx-auto" />
             <p className="text-2xl font-bold">
               + <Km value={result.score} />
             </p>
@@ -300,9 +299,7 @@ function ResultCard({ result, traveling, onNext }: { result: AnswerResult; trave
           </>
         ) : (
           <>
-            <p className="text-3xl" aria-hidden>
-              {MISS.emoji}
-            </p>
+            <TierIcon score={0} scale={4} className="mx-auto" />
             <p className="text-xl font-bold">لم تجد القافلة هذه الإجابة</p>
             <p className="text-sm">ستظهر الإجابات المقبولة في نهاية الرحلة.</p>
           </>

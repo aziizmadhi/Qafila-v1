@@ -21,7 +21,7 @@ export function buildShareText(input: ShareInput): string {
   return [
     `${RLM}${title} · ${input.totalKm} كم`,
     `${RLM}${row}`,
-    `${RLM}🐪 ${tier.name} ${tier.emoji}`,
+    `${RLM}${tier.emoji} ${tier.name}`,
     input.url,
   ].join("\n");
 }

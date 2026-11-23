@@ -1,4 +1,4 @@
-import { MISS, answerTier } from "@/lib/tiers";
+import { TierIcon } from "./TierIcon";
 import type { AnsweredQuestion } from "@/lib/api-types";
 
 /** Seven stops on the route, right to left: done (tier emoji), current, upcoming. */
@@ -26,7 +26,7 @@ export function Progress({ answered, current, total = 7 }: { answered: AnsweredQ
                   : "border-dark-brown/60 bg-sand-shadow/50 text-dark-brown"
             }`}
           >
-            {done ? (answerTier(done.score)?.emoji ?? MISS.emoji) : <span className="km text-sm font-bold">{pos}</span>}
+            {done ? <TierIcon score={done.score} scale={1.5} /> : <span className="km text-sm font-bold">{pos}</span>}
           </li>
         );
       })}

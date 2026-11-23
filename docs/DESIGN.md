@@ -29,7 +29,7 @@ Because every player is in the denominator (D1), correct answers score high: on 
 | Tier | Answer score | Share of correct seed answers | Journey total |
 |---|---|---|---|
 | ⛺ المخيم | 10–79 | ~11% | 0–349 |
-| 🏜️ الكثبان | 80–89 | ~23% | 350–479 |
+| 🐪 الكثبان | 80–89 | ~23% | 350–479 |
 | 🌫️ السراب | 90–95 | ~34% | 480–569 |
 | 🌴 الواحة | 96–98 | ~22% | 570–639 |
 | 🌟 نجم الصحراء | 99–100 | ~10% | 640–700 |

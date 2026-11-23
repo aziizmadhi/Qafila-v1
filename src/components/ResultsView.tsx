@@ -5,9 +5,10 @@ import type { RunResults } from "@/lib/api-types";
 import { categoryName } from "@/lib/categories";
 import { ApiError, api } from "@/lib/client/api";
 import { formatDate } from "@/lib/client/format";
-import { MISS, TIERS, answerTier, journeyTier } from "@/lib/tiers";
+import { TIERS, answerTier, journeyTier } from "@/lib/tiers";
 import { RouteStrip } from "./RouteStrip";
 import { ShareButton } from "./ShareButton";
+import { TierIcon } from "./TierIcon";
 import { ButtonLink, ErrorNote, Km, Loading, Panel } from "./ui";
 
 export function ResultsView({ runId }: { runId: string }) {
@@ -47,8 +48,8 @@ export function ResultsView({ runId }: { runId: string }) {
         <p className="mt-1 text-4xl font-bold text-gold">
           <Km value={data.totalKm} />
         </p>
-        <p className="mt-1 text-lg font-bold">
-          {tier.emoji} {tier.name}
+        <p className="mt-1 flex items-center justify-center gap-2 text-lg font-bold">
+          <TierIcon score={tier.minScore} scale={2} /> {tier.name}
         </p>
         <div className="my-3">
           <RouteStrip scores={scores} />
@@ -61,7 +62,6 @@ export function ResultsView({ runId }: { runId: string }) {
 
       <h2 className="mt-1 text-center text-lg font-bold text-ivory drop-shadow-[0_2px_0_rgba(26,18,34,0.9)]">محطات الرحلة</h2>
       {data.questions.map((q) => {
-        const t = answerTier(q.score);
         return (
           <Panel key={q.position} as="article" className="rise-in">
             <details>
@@ -74,9 +74,7 @@ export function ResultsView({ runId }: { runId: string }) {
                     </h3>
                   </div>
                   <div className="shrink-0 text-center">
-                    <div className="text-2xl" aria-hidden>
-                      {t?.emoji ?? MISS.emoji}
-                    </div>
+                    <TierIcon score={q.score} scale={2} />
                     <Km value={q.score} className="text-sm font-bold" />
                   </div>
                 </div>
@@ -122,8 +120,8 @@ export function ResultsView({ runId }: { runId: string }) {
         <p className="mb-1 font-bold">مراتب الرحلة</p>
         <ul className="grid grid-cols-2 gap-1">
           {TIERS.map((t) => (
-            <li key={t.id}>
-              {t.emoji} {t.name}: <span className="km">{t.minKm}+</span> كم
+            <li key={t.id} className="flex items-center gap-1">
+              <TierIcon score={t.minScore} scale={1} /> {t.name}: <span className="km">{t.minKm}+</span> كم
             </li>
           ))}
         </ul>

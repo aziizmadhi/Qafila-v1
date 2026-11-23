@@ -2,7 +2,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Countdown } from "@/components/Countdown";
-import { Button, ButtonLink, ErrorNote, Km, Loading, Panel } from "@/components/ui";
+import { TierIcon } from "@/components/TierIcon";
+import { ButtonLink, ErrorNote, Km, Loading, Panel } from "@/components/ui";
 import { scene } from "@/game/bridge";
 import type { TodayInfo } from "@/lib/api-types";
 import { ApiError, api } from "@/lib/client/api";
@@ -113,8 +114,8 @@ export default function HomePage() {
           <p className="mt-2 font-bold">المراتب</p>
           <ul className="grid grid-cols-2 gap-1">
             {TIERS.map((t) => (
-              <li key={t.id}>
-                {t.emoji} {t.name}
+              <li key={t.id} className="flex items-center gap-1">
+                <TierIcon score={t.minScore} scale={1} /> {t.name}
               </li>
             ))}
           </ul>

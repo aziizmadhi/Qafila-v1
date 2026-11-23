@@ -80,7 +80,7 @@ describe("share text", () => {
     });
     const lines = text.split("\n");
     expect(lines[0]).toBe("‏قافلة #12 · 484 كم");
-    expect(lines[1]).toBe("‏⬛⛺🏜️🌫️🌴🌟🏜️");
+    expect(lines[1]).toBe("‏⬛⛺🐪🌫️🌴🌟🐪");
     expect(lines[2]).toContain("السراب"); // 484 km → mirage
     expect(lines[3]).toBe("https://example.com");
   });
