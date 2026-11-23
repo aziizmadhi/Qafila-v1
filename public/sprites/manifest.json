@@ -1,0 +1,420 @@
+{
+  "version": 1,
+  "baseGrid": 32,
+  "build": "8dba1c7ac4",
+  "palette": [
+    "#1a1222",
+    "#2d2448",
+    "#4b3a6e",
+    "#8c4a6b",
+    "#c4573f",
+    "#e8834a",
+    "#f5b95f",
+    "#fde4a8",
+    "#fff7e6",
+    "#e0a565",
+    "#b97945",
+    "#8a5233",
+    "#5a3524",
+    "#4f7d4c",
+    "#3f8fa3",
+    "#9fd4d6"
+  ],
+  "sprites": {
+    "camel_rider_idle": {
+      "file": "camel_rider_idle.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frames": 4,
+      "fps": 3,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.96
+      ]
+    },
+    "camel_rider_walk": {
+      "file": "camel_rider_walk.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frames": 8,
+      "fps": 10,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.96
+      ]
+    },
+    "camel_rider_run": {
+      "file": "camel_rider_run.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frames": 6,
+      "fps": 14,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.96
+      ]
+    },
+    "camel_rider_rest": {
+      "file": "camel_rider_rest.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frames": 2,
+      "fps": 2,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.96
+      ]
+    },
+    "camel_pack_idle": {
+      "file": "camel_pack_idle.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frames": 4,
+      "fps": 3,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.96
+      ]
+    },
+    "camel_pack_walk": {
+      "file": "camel_pack_walk.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frames": 8,
+      "fps": 10,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.96
+      ]
+    },
+    "camel_pack_run": {
+      "file": "camel_pack_run.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frames": 6,
+      "fps": 14,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.96
+      ]
+    },
+    "camel_pack_rest": {
+      "file": "camel_pack_rest.png",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frames": 2,
+      "fps": 2,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.96
+      ]
+    },
+    "sky_gradient": {
+      "file": "sky_gradient.png",
+      "frameWidth": 8,
+      "frameHeight": 128,
+      "frames": 8,
+      "fps": 0
+    },
+    "sun": {
+      "file": "sun.png",
+      "frameWidth": 32,
+      "frameHeight": 32,
+      "frames": 2,
+      "fps": 2,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.5
+      ]
+    },
+    "moon": {
+      "file": "moon.png",
+      "frameWidth": 16,
+      "frameHeight": 16,
+      "frames": 1,
+      "fps": 0,
+      "anchor": [
+        0.5,
+        0.5
+      ]
+    },
+    "star_twinkle": {
+      "file": "star_twinkle.png",
+      "frameWidth": 8,
+      "frameHeight": 8,
+      "frames": 4,
+      "fps": 3,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.5
+      ]
+    },
+    "dunes_far": {
+      "file": "dunes_far.png",
+      "frameWidth": 256,
+      "frameHeight": 64,
+      "frames": 1,
+      "fps": 0,
+      "tile": "x",
+      "parallax": 0.15
+    },
+    "dunes_near": {
+      "file": "dunes_near.png",
+      "frameWidth": 256,
+      "frameHeight": 96,
+      "frames": 1,
+      "fps": 0,
+      "tile": "x",
+      "parallax": 0.45
+    },
+    "ground": {
+      "file": "ground.png",
+      "frameWidth": 128,
+      "frameHeight": 32,
+      "frames": 1,
+      "fps": 0,
+      "tile": "x",
+      "parallax": 1
+    },
+    "rock_s": {
+      "file": "rock_s.png",
+      "frameWidth": 16,
+      "frameHeight": 16,
+      "frames": 1,
+      "fps": 0,
+      "anchor": [
+        0.5,
+        0.9
+      ]
+    },
+    "rock_l": {
+      "file": "rock_l.png",
+      "frameWidth": 32,
+      "frameHeight": 32,
+      "frames": 1,
+      "fps": 0,
+      "anchor": [
+        0.5,
+        0.95
+      ]
+    },
+    "shrub": {
+      "file": "shrub.png",
+      "frameWidth": 32,
+      "frameHeight": 32,
+      "frames": 1,
+      "fps": 0,
+      "anchor": [
+        0.5,
+        0.97
+      ]
+    },
+    "acacia": {
+      "file": "acacia.png",
+      "frameWidth": 64,
+      "frameHeight": 64,
+      "frames": 1,
+      "fps": 0,
+      "anchor": [
+        0.5,
+        0.98
+      ]
+    },
+    "cairn": {
+      "file": "cairn.png",
+      "frameWidth": 16,
+      "frameHeight": 32,
+      "frames": 1,
+      "fps": 0,
+      "anchor": [
+        0.5,
+        0.97
+      ]
+    },
+    "dust_puff": {
+      "file": "dust_puff.png",
+      "frameWidth": 16,
+      "frameHeight": 16,
+      "frames": 5,
+      "fps": 16,
+      "loop": false,
+      "anchor": [
+        0.5,
+        0.8
+      ]
+    },
+    "tent": {
+      "file": "tent.png",
+      "frameWidth": 64,
+      "frameHeight": 48,
+      "frames": 1,
+      "fps": 0,
+      "anchor": [
+        0.5,
+        0.97
+      ]
+    },
+    "campfire": {
+      "file": "campfire.png",
+      "frameWidth": 16,
+      "frameHeight": 16,
+      "frames": 6,
+      "fps": 10,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.9
+      ]
+    },
+    "sand_gust": {
+      "file": "sand_gust.png",
+      "frameWidth": 64,
+      "frameHeight": 32,
+      "frames": 8,
+      "fps": 12,
+      "loop": true,
+      "anchor": [
+        0.5,
+        1
+      ]
+    },
+    "mirage_pool": {
+      "file": "mirage_pool.png",
+      "frameWidth": 96,
+      "frameHeight": 16,
+      "frames": 6,
+      "fps": 8,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.5
+      ]
+    },
+    "palm": {
+      "file": "palm.png",
+      "frameWidth": 32,
+      "frameHeight": 64,
+      "frames": 4,
+      "fps": 4,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.98
+      ]
+    },
+    "oasis_water": {
+      "file": "oasis_water.png",
+      "frameWidth": 64,
+      "frameHeight": 16,
+      "frames": 4,
+      "fps": 6,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.5
+      ]
+    },
+    "falling_star": {
+      "file": "falling_star.png",
+      "frameWidth": 48,
+      "frameHeight": 32,
+      "frames": 10,
+      "fps": 16,
+      "loop": false,
+      "anchor": [
+        0.5,
+        0.5
+      ]
+    },
+    "sparkle": {
+      "file": "sparkle.png",
+      "frameWidth": 8,
+      "frameHeight": 8,
+      "frames": 4,
+      "fps": 12,
+      "loop": true,
+      "anchor": [
+        0.5,
+        0.5
+      ]
+    },
+    "route_marker": {
+      "file": "route_marker.png",
+      "frameWidth": 16,
+      "frameHeight": 16,
+      "frames": 6,
+      "fps": 0,
+      "anchor": [
+        0.5,
+        1
+      ]
+    },
+    "tier_badge": {
+      "file": "tier_badge.png",
+      "frameWidth": 32,
+      "frameHeight": 32,
+      "frames": 5,
+      "fps": 0
+    },
+    "waterskin": {
+      "file": "waterskin.png",
+      "frameWidth": 32,
+      "frameHeight": 32,
+      "frames": 11,
+      "fps": 0
+    },
+    "waterskin_drip": {
+      "file": "waterskin_drip.png",
+      "frameWidth": 8,
+      "frameHeight": 8,
+      "frames": 4,
+      "fps": 8,
+      "loop": true
+    },
+    "ui_panel": {
+      "file": "ui_panel.png",
+      "frameWidth": 24,
+      "frameHeight": 24,
+      "frames": 1,
+      "fps": 0
+    },
+    "ui_panel_night": {
+      "file": "ui_panel_night.png",
+      "frameWidth": 24,
+      "frameHeight": 24,
+      "frames": 1,
+      "fps": 0
+    },
+    "ui_button": {
+      "file": "ui_button.png",
+      "frameWidth": 24,
+      "frameHeight": 24,
+      "frames": 1,
+      "fps": 0
+    },
+    "ui_button_pressed": {
+      "file": "ui_button_pressed.png",
+      "frameWidth": 24,
+      "frameHeight": 24,
+      "frames": 1,
+      "fps": 0
+    },
+    "ui_button_secondary": {
+      "file": "ui_button_secondary.png",
+      "frameWidth": 24,
+      "frameHeight": 24,
+      "frames": 1,
+      "fps": 0
+    }
+  }
+}
