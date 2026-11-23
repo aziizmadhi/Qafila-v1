@@ -54,29 +54,56 @@ export const buttonPrimary = () => button(C.terracotta, C.ember, C.darkBrown);
 export const buttonPressed = () => button(C.terracotta, C.ember, C.darkBrown, true);
 export const buttonSecondary = () => button(C.brown, C.sandShadow, C.darkBrown);
 
-/** Waterskin: frame 0 = full … 10 = empty. The leather is drawn translucent-ish so the level reads. */
-export function waterskinFrames(): Pix[] {
-  return Array.from({ length: 11 }, (_, f) => {
-    const p = new Pix(32, 32);
-    const level = 1 - f / 10;
-    const sag = Math.round((1 - level) * 2);
-    // Bag body (wider at the bottom, sags as it empties)
-    p.ellipse(16, 19 + sag / 2, 11 - sag, 10 - sag, C.brown);
-    p.polygon([[11, 10], [21, 10], [19, 14], [13, 14]], C.brown);
-    // Neck, cord and stopper
-    p.rect(14, 5, 4, 6, C.sandShadow);
-    p.line(12, 9, 20, 9, C.darkBrown);
-    p.rect(14, 3, 4, 2, C.darkBrown);
-    // Water inside
-    const top = 29 - Math.round(level * 18);
-    p.shade((x, y, c) => c === C.brown && y >= top && y <= 28 && x >= 7 && x <= 25, C.water);
-    p.shade((x, y, c) => c === C.water && y === top, C.sky);
-    // Stitching and highlight
-    for (let y = 12; y < 28; y += 3) p.set(26 - sag, y, C.darkBrown);
-    p.shade((x, y, c) => c === C.brown && x <= 10 && y <= 18 && bayer(x, y) < 0.5, C.sandShadow);
-    p.outline();
-    return p;
-  });
+/**
+ * Waterskin timer, in two layers that the UI composites at runtime:
+ *   waterskin       the empty flask (leather, neck, stopper, outline)
+ *   waterskin_mask  the interior: every pixel water may cover
+ * The interior is the bag body shrunk by one pixel, so a 1-px leather wall
+ * always separates the water from the outline at any fill level.
+ */
+function waterskinBody(): Pix {
+  const p = new Pix(32, 32);
+  p.ellipse(16, 19, 11, 10, C.brown);
+  p.polygon([[11, 10], [21, 10], [19, 14], [13, 14]], C.brown);
+  return p;
+}
+
+const BAG_TOP = 11; // the neck and the cord sit above this row
+
+export function waterskinMask(): Pix {
+  const body = waterskinBody();
+  const p = new Pix(32, 32);
+  for (let y = BAG_TOP; y < 32; y++) {
+    for (let x = 0; x < 32; x++) {
+      let inside = body.get(x, y) >= 0;
+      for (let dy = -1; dy <= 1 && inside; dy++) {
+        for (let dx = -1; dx <= 1 && inside; dx++) inside = body.get(x + dx, y + dy) >= 0;
+      }
+      if (inside) p.set(x, y, C.water);
+    }
+  }
+  return p;
+}
+
+export function waterskin(): Pix {
+  const p = waterskinBody();
+  const mask = waterskinMask();
+  // Neck, cord and stopper
+  p.rect(14, 5, 4, 6, C.sandShadow);
+  p.line(12, 9, 20, 9, C.darkBrown);
+  p.rect(14, 3, 4, 2, C.darkBrown);
+  // Highlight on the upper-left leather, stitching along the right-hand wall
+  p.shade((x, y, c) => c === C.brown && x <= 10 && y <= 18 && bayer(x, y) < 0.5, C.sandShadow);
+  for (let y = 13; y < 28; y += 3) {
+    for (let x = 31; x > 16; x--) {
+      if (p.get(x, y) >= 0) {
+        if (mask.get(x, y) < 0) p.set(x, y, C.darkBrown); // only ever on the wall
+        break;
+      }
+    }
+  }
+  p.outline();
+  return p;
 }
 
 export function dripFrames(): Pix[] {

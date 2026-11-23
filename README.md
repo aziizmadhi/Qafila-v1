@@ -176,7 +176,7 @@ No code changes are needed. What the engine and UI expect:
 | `camel_{rider,pack}_{idle,walk,run,rest}` | facing **left** (the caravan travels right → left); anchor at the feet |
 | `sky_gradient` | 8 frames, one per hour: 0 dawn … 6 dusk, 7 night. Tiled horizontally, stretched vertically |
 | `dunes_far`, `dunes_near`, `ground` | tile horizontally; `parallax` sets their scroll speed |
-| `waterskin` | frame 0 = full … last = empty; the timer picks the frame |
+| `waterskin`, `waterskin_mask` | the empty flask, and a same-size mask of the pixels water may fill (keep a 1-px leather wall inside the outline). The timer draws water row by row on the mask, so it never covers the outline |
 | `route_marker` | frame 0 = miss, 1–5 = camp … desert star |
 | `ui_panel`, `ui_button*` | 24×24 9-slice with 8-px corners (CSS `border-image`) |
 
