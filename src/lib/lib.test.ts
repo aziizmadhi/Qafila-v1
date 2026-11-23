@@ -36,18 +36,20 @@ describe("tiers", () => {
   it("maps answer scores", () => {
     expect(answerTier(0)).toBeNull();
     expect(answerTier(10)?.id).toBe("camp");
-    expect(answerTier(49)?.id).toBe("camp");
-    expect(answerTier(50)?.id).toBe("dunes");
-    expect(answerTier(75)?.id).toBe("mirage");
-    expect(answerTier(90)?.id).toBe("oasis");
-    expect(answerTier(98)?.id).toBe("star");
+    expect(answerTier(79)?.id).toBe("camp");
+    expect(answerTier(80)?.id).toBe("dunes");
+    expect(answerTier(90)?.id).toBe("mirage");
+    expect(answerTier(96)?.id).toBe("oasis");
+    expect(answerTier(99)?.id).toBe("star");
     expect(tierIndex(0)).toBe(0);
     expect(tierIndex(100)).toBe(5);
   });
 
   it("maps journey totals", () => {
     expect(journeyTier(0).id).toBe("camp");
-    expect(journeyTier(399).id).toBe("dunes");
+    expect(journeyTier(349).id).toBe("camp");
+    expect(journeyTier(479).id).toBe("dunes");
+    expect(journeyTier(520).id).toBe("mirage");
     expect(journeyTier(650).id).toBe("star");
   });
 });
@@ -72,14 +74,14 @@ describe("share text", () => {
   it("is spoiler-free and RTL-safe", () => {
     const text = buildShareText({
       journeyNumber: 12,
-      scores: [0, 30, 60, 80, 95, 99, 55],
-      totalKm: 419,
+      scores: [0, 30, 85, 92, 97, 99, 81],
+      totalKm: 484,
       url: "https://example.com",
     });
     const lines = text.split("\n");
-    expect(lines[0]).toBe("‏قافلة #12 · 419 كم");
+    expect(lines[0]).toBe("‏قافلة #12 · 484 كم");
     expect(lines[1]).toBe("‏⬛⛺🏜️🌫️🌴🌟🏜️");
-    expect(lines[2]).toContain("السراب");
+    expect(lines[2]).toContain("السراب"); // 484 km → mirage
     expect(lines[3]).toBe("https://example.com");
   });
 });

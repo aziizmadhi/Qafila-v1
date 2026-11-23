@@ -14,12 +14,18 @@ export interface Tier {
   minKm: number;
 }
 
+/*
+ * Tuned on the seed content (see docs/DESIGN.md → "Tier bands"): because the
+ * rarity denominator includes every player, correct answers score high and
+ * spread over the last ~25 km. Answer bands split correct seed answers roughly
+ * 11 / 23 / 34 / 22 / 10 %, and a typical journey (~520 km) lands in the middle.
+ */
 export const TIERS: readonly Tier[] = [
   { id: "camp", name: "المخيم", emoji: "⛺", minScore: 10, minKm: 0 },
-  { id: "dunes", name: "الكثبان", emoji: "🏜️", minScore: 50, minKm: 250 },
-  { id: "mirage", name: "السراب", emoji: "🌫️", minScore: 75, minKm: 400 },
-  { id: "oasis", name: "الواحة", emoji: "🌴", minScore: 90, minKm: 500 },
-  { id: "star", name: "نجم الصحراء", emoji: "🌟", minScore: 98, minKm: 600 },
+  { id: "dunes", name: "الكثبان", emoji: "🏜️", minScore: 80, minKm: 350 },
+  { id: "mirage", name: "السراب", emoji: "🌫️", minScore: 90, minKm: 480 },
+  { id: "oasis", name: "الواحة", emoji: "🌴", minScore: 96, minKm: 570 },
+  { id: "star", name: "نجم الصحراء", emoji: "🌟", minScore: 99, minKm: 640 },
 ];
 
 /** Shown for a wrong answer or a timeout. */

@@ -19,8 +19,22 @@ This file records the decisions approved before implementation. Change it when a
 - **Abandoned questions** time out on the server clock (30 s + 2 s grace). Unserved questions can be resumed the same day (plus a 15-minute grace after midnight).
 - **Import** confirms after the dry-run diff (`--yes` skips the prompt). Removing an answer that responses already matched needs `--allow-removals`.
 - **Dev clock**: `QAFILA_FAKE_TODAY=YYYY-MM-DD` (ignored in production).
-- **Unmatched log** is derived from `responses` (match = none) by `export_unmatched()`, so retroactive acceptance can never leave it out of sync.
+- **Unmatched log** is derived from `responses` (match = none) by `npm run export-unmatched`, so retroactive acceptance can never leave it out of sync.
 - **Tier thresholds** live in `src/lib/tiers.ts`.
+
+## Tier bands (tuned on the seed)
+
+Because every player is in the denominator (D1), correct answers score high: on the seed the most common answer to a question scores 65–94 km (median 82), and a typical correct answer about 91.
+
+| Tier | Answer score | Share of correct seed answers | Journey total |
+|---|---|---|---|
+| ⛺ المخيم | 10–79 | ~11% | 0–349 |
+| 🏜️ الكثبان | 80–89 | ~23% | 350–479 |
+| 🌫️ السراب | 90–95 | ~34% | 480–569 |
+| 🌴 الواحة | 96–98 | ~22% | 570–639 |
+| 🌟 نجم الصحراء | 99–100 | ~10% | 640–700 |
+
+A typical journey, with misses included, is about 520 km. Re-tune once live data exists: real players concentrate on the top answers more than seeds assume.
 
 ## Scoring
 
