@@ -77,7 +77,7 @@ npm run dev                          # http://localhost:3000
 |---|---|
 | `npm run dev` / `build` / `start` | Next.js |
 | `npm test` | unit tests (normalizer, matcher, scoring, CSV validation, …) |
-| `npm run test:db` | integration tests: migrations, RLS, import, game flow, merge |
+| `npm run test:db` | integration tests: migrations, RLS, import, game flow, retries, SQL/TS parity, no-leak checks, merge |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run import -- file.csv` | validate → dry-run diff → confirm → upsert (+ retroactive rescoring) |
 | `npm run import-vocabulary -- file.csv` | add extra names to the answer-suggestion pools (`category,name`) |
@@ -90,7 +90,7 @@ npm run dev                          # http://localhost:3000
 ## Tests
 
 ```bash
-npm test             # 140+ unit tests, no services needed
+npm test             # 170+ unit tests, no services needed
 npm run test:db      # needs a Postgres you can create databases on
 ```
 
@@ -100,7 +100,11 @@ npm run test:db      # needs a Postgres you can create databases on
 TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres npm run test:db
 ```
 
-The normalizer tests include 79 real spelling variations from different regions.
+The normalizer tests include 79 real spelling variations from different regions. Other suites worth knowing:
+
+- `tests/db/retries.test.ts`: retries until the first correct answer, the deadline and its grace, duplicates, the 400 ms and 25-attempt limits, first-correct-only stats, retroactive acceptance of an earlier attempt.
+- `tests/db/leaks.test.ts`: calls the real journey and suggestion route handlers and fails if any response contains an accepted answer, a variant, a frequency or a correctness flag.
+- `tests/db/parity.test.ts`: the SQL hot path and the TypeScript matcher/scorer agree on every seed answer and thousands of typos.
 
 ## Deployment
 

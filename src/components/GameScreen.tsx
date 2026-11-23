@@ -4,13 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { scene } from "@/game/bridge";
 import type { AnswerResult, CurrentQuestion, RunMode, RunState } from "@/lib/api-types";
 import { categoryName } from "@/lib/categories";
+import { AttemptGate, cleanAnswer } from "@/lib/attempts";
 import { ApiError, api } from "@/lib/client/api";
 import { formatDate } from "@/lib/client/format";
 import { loadSuggestionPools } from "@/lib/client/suggestions";
-import { normalizeAnswer } from "@/lib/normalize";
 import type { SuggestionIndex } from "@/lib/suggest";
 import { tierById } from "@/lib/tiers";
-import { MIN_ATTEMPT_GAP_MS, QUESTION_MS, TRANSITION_MS, nextQuestionStart } from "@/lib/timing";
+import { QUESTION_MS, TRANSITION_MS, nextQuestionStart } from "@/lib/timing";
 import { AnswerBox } from "./AnswerBox";
 import { Progress } from "./Progress";
 import { TierIcon } from "./TierIcon";
@@ -26,7 +26,6 @@ import { Waterskin } from "./Waterskin";
 type Phase = "loading" | "intro" | "question" | "result" | "error";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const clean = (s: string) => s.replace(/\s+/g, " ").trim();
 
 export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const router = useRouter();
@@ -45,9 +44,8 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const offsetRef = useRef(0); // server clock − client clock
   const pendingRef = useRef(false);
   const timeUpWhilePendingRef = useRef(false);
-  const lastSentRef = useRef(0);
-  // Normalized wrong answers already tried, per question: repeats shake at once, no request.
-  const triedRef = useRef(new Map<number, Set<string>>());
+  // Empty answers, repeats of a wrong answer (shake at once, no request) and attempt spacing.
+  const gateRef = useRef(new AttemptGate());
   const [hurt, setHurt] = useState(0);
   const [notice, setNotice] = useState("");
   const [locked, setLocked] = useState(false);
@@ -188,7 +186,7 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const wrong = useCallback((raw: string, message: string) => {
     setHurt((h) => h + 1);
     setNotice(message);
-    setAnswer((a) => (clean(a) === raw ? "" : a)); // keep anything typed since
+    setAnswer((a) => (cleanAnswer(a) === raw ? "" : a)); // keep anything typed since
     inputRef.current?.focus({ preventScroll: true });
   }, []);
 
@@ -228,22 +226,20 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
       const state = runRef.current;
       if (phase !== "question" || !state?.current || locked) return;
       const position = state.current.position;
-      const raw = clean(text);
-      if (!raw) return;
-      const norm = normalizeAnswer(raw);
-      let tried = triedRef.current.get(position);
-      if (!tried) triedRef.current.set(position, (tried = new Set()));
-      if (tried.has(norm)) {
-        wrong(raw, "جرّبت هذه الإجابة من قبل.");
+      const gate = gateRef.current;
+      const check = gate.check(position, text, Date.now());
+      if (check.kind === "empty") return;
+      if (check.kind === "duplicate") {
+        wrong(check.raw, "جرّبت هذه الإجابة من قبل.");
         return;
       }
+      const { raw, norm } = check;
       if (pendingRef.current) return;
       pendingRef.current = true;
       timeUpWhilePendingRef.current = false;
       try {
-        const wait = lastSentRef.current + MIN_ATTEMPT_GAP_MS - Date.now();
-        if (wait > 0) await sleep(wait);
-        lastSentRef.current = Date.now();
+        if (check.waitMs > 0) await sleep(check.waitMs);
+        gate.sent(Date.now());
         const sentAt = Date.now();
         const r = await api.answer(state.id, position, raw);
         syncClock(r.serverNow, sentAt);
@@ -252,7 +248,7 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
           finishQuestion(r, raw);
           return;
         }
-        tried.add(norm);
+        gate.wrong(position, norm);
         if (timeUpWhilePendingRef.current) {
           timeUp();
           return;
