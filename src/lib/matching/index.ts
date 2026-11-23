@@ -85,3 +85,20 @@ export function matchAnswer(normalized: string, index: MatchIndex): MatchResult 
   }
   return candidate === null ? null : { answerId: candidate, kind: "fuzzy" };
 }
+
+/** Full Levenshtein distance (used only for review tooling, not for matching). */
+export function levenshtein(a: string, b: string): number {
+  const x = Array.from(a);
+  const y = Array.from(b);
+  if (x.length === 0) return y.length;
+  if (y.length === 0) return x.length;
+  let prev = Array.from({ length: y.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= x.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (x[i - 1] === y[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[y.length]!;
+}
