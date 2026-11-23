@@ -6,15 +6,19 @@ import type { AnswerResult, RunMode, RunState } from "@/lib/api-types";
 import { categoryName } from "@/lib/categories";
 import { ApiError, api } from "@/lib/client/api";
 import { formatDate } from "@/lib/client/format";
+import { normalizeAnswer } from "@/lib/normalize";
 import { tierById } from "@/lib/tiers";
 import { Progress } from "./Progress";
 import { TierIcon } from "./TierIcon";
 import { Button, ButtonLink, ErrorNote, Km, Loading, Panel } from "./ui";
 import { Waterskin } from "./Waterskin";
 
-type Phase = "loading" | "intro" | "question" | "submitting" | "result" | "between" | "error";
+type Phase = "loading" | "intro" | "question" | "result" | "between" | "error";
 
 const QUESTION_MS = 30_000;
+/** Matches the server's MIN_ATTEMPT_GAP_MS: attempts closer than this are spaced out, not dropped. */
+const MIN_ATTEMPT_GAP_MS = 400;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const router = useRouter();
@@ -31,7 +35,14 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const [traveling, setTraveling] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const offsetRef = useRef(0); // server clock − client clock
-  const submittingRef = useRef(false);
+  const pendingRef = useRef(false);
+  const lastSentRef = useRef(0);
+  const closingRef = useRef(false);
+  // Normalized wrong answers already tried, per question: repeats shake at once, no request.
+  const triedRef = useRef(new Map<number, Set<string>>());
+  const [hurt, setHurt] = useState(0);
+  const [notice, setNotice] = useState("");
+  const [locked, setLocked] = useState(false);
 
   const fail = useCallback(
     (e: unknown) => {
@@ -92,51 +103,136 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
     }
   }, [applyState, fail]);
 
+  /** A question is over (first correct answer, or the clock ran out): show it and move the caravan. */
+  const finishQuestion = useCallback(
+    (r: AnswerResult, answer: string | null) => {
+      const current = runRef.current;
+      if (!current?.current || current.current.position !== r.position) return;
+      setResult(r);
+      setRun({
+        ...current,
+        totalKm: r.totalKm,
+        finished: r.finished,
+        current: null,
+        answered: [
+          ...current.answered,
+          {
+            position: r.position,
+            category: current.current.category,
+            score: r.score,
+            correct: r.correct,
+            timedOut: r.timedOut,
+            answer,
+            matched: r.matched,
+          },
+        ],
+      });
+      setNotice("");
+      setLocked(false);
+      setPhase("result");
+      setTraveling(true);
+      void scene.travel(r.score, r.tier).finally(() => setTraveling(false));
+    },
+    [setRun],
+  );
+
+  const recover = useCallback(
+    async (e: unknown) => {
+      const current = runRef.current;
+      if (current && e instanceof ApiError && (e.code === "already_answered" || e.code === "not_served")) {
+        try {
+          applyState(await api.run(current.id));
+        } catch (err) {
+          fail(err);
+        }
+      } else {
+        fail(e);
+      }
+    },
+    [applyState, fail],
+  );
+
+  /** Wrong answer: shake the waterskin, clear the box, keep the keyboard up. */
+  const wrong = useCallback((raw: string, message: string) => {
+    setHurt((h) => h + 1);
+    setNotice(message);
+    const input = inputRef.current;
+    if (input) {
+      if (input.value.replace(/\s+/g, " ").trim() === raw) input.value = "";
+      input.focus({ preventScroll: true });
+    }
+  }, []);
+
   const submit = useCallback(
     async (text: string) => {
       const run = runRef.current;
-      if (!run?.current || submittingRef.current) return;
-      submittingRef.current = true;
+      if (!run?.current || locked) return;
       const position = run.current.position;
-      setPhase("submitting");
+      const raw = text.replace(/\s+/g, " ").trim();
+      if (!raw) return;
+      const norm = normalizeAnswer(raw);
+      let tried = triedRef.current.get(position);
+      if (!tried) triedRef.current.set(position, (tried = new Set()));
+      if (tried.has(norm)) {
+        wrong(raw, "جرّبت هذه الإجابة من قبل.");
+        return;
+      }
+      if (pendingRef.current) return;
+      pendingRef.current = true;
       try {
-        const r = await api.answer(run.id, position, text);
-        setResult(r);
-        setRun({
-          ...run,
-          totalKm: r.totalKm,
-          finished: r.finished,
-          current: null,
-          answered: [
-            ...run.answered,
-            {
-              position,
-              category: run.current.category,
-              score: r.score,
-              correct: r.correct,
-              timedOut: r.timedOut,
-              answer: text,
-              matched: r.matched,
-            },
-          ],
-        });
-        setPhase("result");
-        setTraveling(true);
-        void scene.travel(r.score, r.tier).finally(() => setTraveling(false));
-      } catch (e) {
-        if (e instanceof ApiError && (e.code === "already_answered" || e.code === "not_served")) {
-          applyState(await api.run(run.id));
+        const wait = lastSentRef.current + MIN_ATTEMPT_GAP_MS - Date.now();
+        if (wait > 0) await sleep(wait);
+        lastSentRef.current = Date.now();
+        const r = await api.answer(run.id, position, raw);
+        if (r.correct || r.timedOut) {
+          finishQuestion(r, raw);
         } else {
-          fail(e);
+          tried.add(norm);
+          wrong(raw, r.duplicate ? "جرّبت هذه الإجابة من قبل." : "ليست هذه. حاول مرة أخرى!");
+          if (r.attemptsLeft === 0) setLocked(true);
         }
+      } catch (e) {
+        if (e instanceof ApiError && e.code === "too_fast") return; // the next try goes through
+        if (e instanceof ApiError && e.code === "too_many_attempts") {
+          setLocked(true);
+          setNotice(e.message);
+          return;
+        }
+        await recover(e);
       } finally {
-        submittingRef.current = false;
+        pendingRef.current = false;
       }
     },
-    [applyState, fail, setRun],
+    [finishQuestion, locked, recover, wrong],
   );
 
-  // The waterskin: counts down from the server deadline; auto-submits at zero.
+  /** The waterskin ran dry: the server closes the question with 0 km. */
+  const timeUp = useCallback(async () => {
+    const run = runRef.current;
+    if (!run?.current || closingRef.current) return;
+    closingRef.current = true;
+    const position = run.current.position;
+    try {
+      for (let tries = 0; ; tries++) {
+        try {
+          finishQuestion(await api.timeout(run.id, position), null);
+          return;
+        } catch (e) {
+          if (e instanceof ApiError && e.code === "not_yet" && tries < 3) {
+            await sleep(1000); // our clock ran a little fast
+            continue;
+          }
+          throw e;
+        }
+      }
+    } catch (e) {
+      await recover(e);
+    } finally {
+      closingRef.current = false;
+    }
+  }, [finishQuestion, recover]);
+
+  // The waterskin: counts down from the server deadline; at zero the question closes.
   useEffect(() => {
     if (phase !== "question" || !run?.current) return;
     const deadline = Date.parse(run.current.deadline);
@@ -145,7 +241,7 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
       const left = deadline - (Date.now() + offsetRef.current);
       setRemainingMs(Math.max(0, left));
       if (left <= 0) {
-        void submit(inputRef.current?.value ?? "");
+        void timeUp();
         return;
       }
       raf = requestAnimationFrame(tick);
@@ -156,7 +252,14 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
       cancelAnimationFrame(raf);
       window.clearTimeout(t);
     };
-  }, [phase, run?.current, submit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [phase, run?.current, timeUp]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A new question: fresh notice, unlocked input.
+  const position = run?.current?.position;
+  useEffect(() => {
+    setNotice("");
+    setLocked(false);
+  }, [position]);
 
   if (phase === "loading" && !run) return <Loading />;
   if (phase === "error") return <ErrorNote message={error} onRetry={() => void load()} />;
@@ -187,7 +290,7 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
           <h2 className="mb-2 text-xl font-bold">رحلة اليوم</h2>
           <ul className="mb-4 list-inside list-disc space-y-1 text-[0.95rem]">
             <li>سبعة أسئلة، ولكل سؤال 30 ثانية تنفد معها القربة.</li>
-            <li>اكتب أي إجابة صحيحة، وبأي لهجة أو تهجئة.</li>
+            <li>اكتب أي إجابة صحيحة، وبأي لهجة أو تهجئة. إن أخطأت فجرّب مجددًا حتى تنفد القربة.</li>
             <li>كلما كانت إجابتك أندر بين اللاعبين، قطعت القافلة مسافة أطول.</li>
           </ul>
           <Button className="w-full" onClick={() => void next()}>
@@ -207,7 +310,7 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
         </Panel>
       ) : null}
 
-      {(phase === "question" || phase === "submitting") && run.current ? (
+      {phase === "question" && run.current ? (
         <Panel className="rise-in" key={run.current.position}>
           <div className="mb-2 flex items-center justify-between">
             <span className="text-sm font-bold">
@@ -216,7 +319,7 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
             <span className="chip">{categoryName(run.current.category)}</span>
           </div>
           <h2 className="mb-3 text-[1.35rem] font-bold leading-snug">{run.current.text}</h2>
-          <Waterskin fraction={remainingMs / QUESTION_MS} seconds={seconds} />
+          <Waterskin fraction={remainingMs / QUESTION_MS} seconds={seconds} hurt={hurt} />
           <form
             className="mt-3 flex flex-col gap-2"
             onSubmit={(e) => {
@@ -241,11 +344,16 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
               spellCheck={false}
               maxLength={120}
               placeholder="اكتب إجابتك…"
-              disabled={phase === "submitting"}
+              disabled={locked}
+              aria-describedby="answer-notice"
             />
-            <Button type="submit" disabled={phase === "submitting"}>
-              {phase === "submitting" ? "جارٍ التحقق…" : "أرسل الإجابة"}
+            {/* preventDefault on pointer-down keeps focus (and the phone keyboard) on the input. */}
+            <Button type="submit" disabled={locked} onPointerDown={(e) => e.preventDefault()}>
+              أرسل الإجابة
             </Button>
+            <p id="answer-notice" className="min-h-5 text-center text-sm font-bold text-terracotta" aria-live="assertive">
+              {notice}
+            </p>
           </form>
         </Panel>
       ) : null}

@@ -80,7 +80,13 @@ export function ResultsView({ runId }: { runId: string }) {
                 </div>
                 <p className="mt-1 text-sm">
                   {q.timedOut ? (
-                    "نفد الوقت."
+                    q.answer ? (
+                      <>
+                        نفد الوقت. آخر محاولة: <b dir="auto">{q.answer}</b>
+                      </>
+                    ) : (
+                      "نفد الوقت."
+                    )
                   ) : q.answer ? (
                     <>
                       إجابتك: <b dir="auto">{q.answer}</b>

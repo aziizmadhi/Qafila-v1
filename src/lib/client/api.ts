@@ -60,6 +60,7 @@ export const api = {
   next: (id: string) => post<RunState>(`/api/runs/${id}/next`),
   answer: (id: string, position: number, answer: string) =>
     post<AnswerResult>(`/api/runs/${id}/answer`, { position, answer }),
+  timeout: (id: string, position: number) => post<AnswerResult>(`/api/runs/${id}/timeout`, { position }),
   results: (id: string) => call<RunResults>(`/api/runs/${id}/results`),
   journeys: () => call<PastJourney[]>("/api/journeys"),
   me: () => call<ProfileInfo>("/api/me"),

@@ -1,7 +1,8 @@
 /**
  * npm run export-unmatched -- --since=YYYY-MM-DD [--until=YYYY-MM-DD] [--out=file.csv] [--min-count=1]
  *
- * Writes every answer that matched nothing, grouped per question by its
+ * Writes every attempt that matched nothing (players may retry, so this is
+ * every wrong answer, not just final ones), grouped per question by its
  * normalized form and sorted by how many players typed it, so you can copy
  * the valid ones into the sheet as variants and re-import.
  */
@@ -51,19 +52,19 @@ async function main() {
       last_seen: Date;
     }[]
   >`
-    select r.question_id, j.play_date::text as date, j.track, q.position, q.text as question, r.norm_text,
+    select a.question_id, j.play_date::text as date, j.track, q.position, q.text as question, a.norm_text,
       count(*)::int as count,
-      (select count(*)::int from responses x where x.question_id = r.question_id and x.match is not null) as total,
-      array_agg(r.raw_text order by r.answered_at) as raws,
-      min(r.answered_at) as first_seen, max(r.answered_at) as last_seen
-    from responses r
-    join questions q on q.id = r.question_id
+      (select count(*)::int from responses x where x.question_id = a.question_id and x.match is not null) as total,
+      array_agg(a.raw_text order by a.created_at) as raws,
+      min(a.created_at) as first_seen, max(a.created_at) as last_seen
+    from attempts a
+    join questions q on q.id = a.question_id
     join journeys j on j.id = q.journey_id
-    where r.match = 'none' and coalesce(r.norm_text, '') <> ''
-      and r.answered_at >= ${from} and r.answered_at < ${to}
-    group by r.question_id, j.play_date, j.track, q.position, q.text, r.norm_text
+    where a.match = 'none' and a.norm_text <> ''
+      and a.created_at >= ${from} and a.created_at < ${to}
+    group by a.question_id, j.play_date, j.track, q.position, q.text, a.norm_text
     having count(*) >= ${minCount}
-    order by count(*) desc, j.play_date, q.position, r.norm_text`;
+    order by count(*) desc, j.play_date, q.position, a.norm_text`;
 
   // Closest accepted answer, to speed up review.
   const qids = [...new Set(rows.map((r) => r.question_id))];
@@ -88,7 +89,7 @@ async function main() {
       "answer",
       "normalized",
       "count",
-      "share_of_responses",
+      "share_of_players",
       "spellings",
       "closest_canonical",
       "edit_distance",

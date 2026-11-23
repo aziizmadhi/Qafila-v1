@@ -22,6 +22,8 @@ export interface CurrentQuestion {
   /** Display deadline (served + 30 s). The server accepts 2 s of network grace on top. */
   deadline: string;
   serverNow: string;
+  /** Wrong answers already tried on this question (distinct spellings). */
+  attempts: number;
 }
 
 export interface RunState {
@@ -40,6 +42,10 @@ export interface AnswerResult {
   position: number;
   correct: boolean;
   timedOut: boolean;
+  /** Wrong, and the same answer (after normalization) was already tried: not counted. */
+  duplicate?: boolean;
+  /** Attempts left on this question after a wrong answer. */
+  attemptsLeft?: number;
   score: number;
   tier: TierId | null;
   matched: string | null;

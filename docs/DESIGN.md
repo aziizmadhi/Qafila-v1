@@ -12,6 +12,7 @@ This file records the decisions approved before implementation. Change it when a
 | D4 | Numerals | Western digits (0–9) everywhere in the UI. |
 | D5 | Account conflict | Anonymous runs are merged into the existing account; if both played the same daily journey, the account's run is kept. |
 | D6 | Share card | Text only (Web Share API + clipboard), with an RLM mark so the emoji row reads right-to-left. |
+| D7 | Retries | A question stays open until the player's **first correct answer** or the deadline (30 s + 2 s grace, enforced on the server). Wrong answers shake the waterskin and are logged; the same answer again (after normalization) is not counted. At most one attempt per 400 ms and 25 distinct attempts per question. No time penalty for wrong answers. Only the first correct answer is the response and enters the rarity stats; the denominator is unchanged (every daily player who reached the question). |
 
 ## Smaller defaults
 
@@ -19,7 +20,7 @@ This file records the decisions approved before implementation. Change it when a
 - **Abandoned questions** time out on the server clock (30 s + 2 s grace). Unserved questions can be resumed the same day (plus a 15-minute grace after midnight).
 - **Import** confirms after the dry-run diff (`--yes` skips the prompt). Removing an answer that responses already matched needs `--allow-removals`.
 - **Dev clock**: `QAFILA_FAKE_TODAY=YYYY-MM-DD` (ignored in production).
-- **Unmatched log** is derived from `responses` (match = none) by `npm run export-unmatched`, so retroactive acceptance can never leave it out of sync.
+- **Unmatched log** is the `attempts` table (every distinct wrong attempt, kept matched against the current answers by re-matching), exported by `npm run export-unmatched`. Retroactive acceptance walks each player's attempts in order: the earliest one that now matches becomes their answer.
 - **Tier thresholds** live in `src/lib/tiers.ts`.
 - **Dunes emoji** in the share text is 🐪, not 🏜️: most platforms draw 🏜️ with a cactus, which doesn't belong in an Arabian desert. In-app tier icons are pixel art.
 - **Sprites** marked `"custom": true` in the manifest are never overwritten by `npm run sprites`.
@@ -46,10 +47,10 @@ share  = w * (live_count / live_total) + (1 - w) * seed_frequency
 score  = correct ? max(10, round(100 * (1 - share))) : 0
 ```
 
-`live_total` counts every daily response to the question (correct, wrong and timeouts). `live_count` counts daily responses that matched the canonical. Unlimited responses are never counted.
+`live_total` counts every daily response to the question (one per player: their first correct answer, or a timeout). `live_count` counts daily responses whose first correct answer was that canonical. Wrong attempts and Unlimited responses are never counted.
 
 ## Answer secrecy and timing
 
 - The client never reads content tables. Question text is released by `POST /api/runs/:id/next`, which stamps `served_at` once.
 - Accepted answers are only sent by `GET /api/runs/:id/results`, which refuses unfinished runs.
-- An answer later than `served_at + 32 s` counts as a timeout.
+- An answer later than `served_at + 32 s` counts as a timeout. When the player's clock runs out, `POST /api/runs/:id/timeout` closes the question (accepted from 1.5 s before the displayed deadline, for clock skew).

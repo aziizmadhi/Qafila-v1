@@ -19,6 +19,9 @@ export const errors = {
   dayOver: () => new GameError(410, "day_over", "انتهى يوم هذه القافلة. يمكنك لعبها في الرحلات المفتوحة."),
   notPast: () => new GameError(400, "not_past", "الرحلات المفتوحة متاحة للأيام الماضية فقط."),
   badInput: (msg = "طلب غير صالح.") => new GameError(400, "bad_input", msg),
+  tooFast: () => new GameError(429, "too_fast", "تمهّل قليلًا بين المحاولات."),
+  tooManyAttempts: () => new GameError(429, "too_many_attempts", "استنفدت محاولاتك لهذا السؤال."),
+  notYet: () => new GameError(409, "not_yet", "لم ينته وقت هذا السؤال بعد."),
   rateLimited: () => new GameError(429, "rate_limited", "تمهّل قليلًا! حاول مرة أخرى بعد لحظات."),
   unauthorized: () => new GameError(401, "unauthorized", "يجب تسجيل الدخول (يكفي الدخول كضيف)."),
 };

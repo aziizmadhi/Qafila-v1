@@ -8,7 +8,11 @@ import { api, json, readJson } from "@/server/http";
 export const dynamic = "force-dynamic";
 const UUID = /^[0-9a-f-]{36}$/i;
 
-/** Submit { position, answer }. Scored on the server; one submission per question. */
+/**
+ * Submit { position, answer }. Scored on the server. Wrong answers keep the
+ * question open (retries are limited per question: see MIN_ATTEMPT_GAP_MS and
+ * MAX_ATTEMPTS); the first correct answer closes it.
+ */
 export const POST = api(async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
   const user = await requireUser();
   const { id } = await ctx.params;
@@ -18,6 +22,6 @@ export const POST = api(async (req: Request, ctx: { params: Promise<{ id: string
   const answer = typeof body.answer === "string" ? body.answer : "";
   if (answer.length > MAX_ANSWER_CHARS * 4) throw errors.badInput("الإجابة طويلة جدًا.");
   const db = getDb();
-  await rateLimit(db, `u:${user.id}:answer`, 30);
+  await rateLimit(db, `u:${user.id}:answer`, 200);
   return json(await submitAnswer(db, user.id, id, position, answer));
 });

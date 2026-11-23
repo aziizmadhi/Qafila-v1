@@ -3,7 +3,7 @@ import { applyContent } from "@/server/content/apply";
 import { diffContent, loadExisting } from "@/server/content/diff";
 import { parseContentCsv } from "@/server/content/validate";
 import { createMergeTicket, getProfile, getToday, listPastJourneys, mergeFromTicket } from "@/server/game/profile";
-import { getResults, getRunState, serveNext, startRun, submitAnswer } from "@/server/game/runs";
+import { closeTimedOut, getResults, getRunState, serveNext, startRun, submitAnswer } from "@/server/game/runs";
 import { finalizeDueJourneys } from "@/server/scoring/finalize";
 import { createTestDb, dayCsv, type TestDb } from "./harness";
 
@@ -57,18 +57,29 @@ describe("daily journey", () => {
     await serveNext(t.db, u, s.id, plus(NOON, 10_000));
     const r2 = await submitAnswer(t.db, u, s.id, 2, "جواب ثالت 2", plus(NOON, 12_000));
     expect(r2).toMatchObject({ correct: true, matched: "جواب ثالث 2" });
-    await serveNext(t.db, u, s.id, plus(NOON, 20_000));
-    const r3 = await submitAnswer(t.db, u, s.id, 3, "شيء آخر", plus(NOON, 22_000));
-    expect(r3).toMatchObject({ correct: false, score: 0, matched: null, tier: null });
-    await serveNext(t.db, u, s.id, plus(NOON, 30_000));
-    const r4 = await submitAnswer(t.db, u, s.id, 4, "جواب أول 4", plus(NOON, 30_000 + 33_000));
+    // Q3: wrong answers keep the question open; the clock runs out.
+    const T3 = plus(NOON, 20_000);
+    await serveNext(t.db, u, s.id, T3);
+    const r3 = await submitAnswer(t.db, u, s.id, 3, "شيء آخر", plus(T3, 2000));
+    expect(r3).toMatchObject({ correct: false, timedOut: false, duplicate: false, attemptsLeft: 24, score: 0, matched: null });
+    const r3dup = await submitAnswer(t.db, u, s.id, 3, "  شيء  آخر! ", plus(T3, 3000));
+    expect(r3dup).toMatchObject({ correct: false, duplicate: true, attemptsLeft: 24 });
+    await expect(submitAnswer(t.db, u, s.id, 3, "غيره", plus(T3, 3200))).rejects.toMatchObject({ code: "too_fast" });
+    await expect(closeTimedOut(t.db, u, s.id, 3, plus(T3, 10_000))).rejects.toMatchObject({ code: "not_yet" });
+    const r3t = await closeTimedOut(t.db, u, s.id, 3, plus(T3, 29_000));
+    expect(r3t).toMatchObject({ correct: false, timedOut: true, score: 0, finished: false });
+
+    // Q4: an answer after the deadline (+ grace) closes it as a timeout.
+    const T4 = plus(NOON, 60_000);
+    await serveNext(t.db, u, s.id, T4);
+    const r4 = await submitAnswer(t.db, u, s.id, 4, "جواب أول 4", plus(T4, 33_000));
     expect(r4).toMatchObject({ timedOut: true, score: 0, correct: false });
 
     // Results are hidden until the run is finished.
-    await expect(getResults(t.db, u, s.id, plus(NOON, 70_000))).rejects.toMatchObject({ code: "not_finished" });
+    await expect(getResults(t.db, u, s.id, plus(NOON, 95_000))).rejects.toMatchObject({ code: "not_finished" });
 
     // Q5 is served and abandoned: the next request closes it as a timeout.
-    await serveNext(t.db, u, s.id, plus(NOON, 80_000));
+    await serveNext(t.db, u, s.id, plus(NOON, 100_000));
     const st = await getRunState(t.db, u, s.id, plus(NOON, 200_000));
     expect(st.answered.find((a) => a.position === 5)?.timedOut).toBe(true);
     expect(st.current).toBeNull();
