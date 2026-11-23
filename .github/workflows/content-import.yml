@@ -1,0 +1,62 @@
+# Imports a content CSV (questions + accepted answers) into the production database.
+# Commit the CSV to the repo first (e.g. content/2026-12.csv), then run it from GitHub:
+# Actions → "Content: import CSV" → Run workflow.
+#
+# Required repository secret (only for mode "import"):
+#   DATABASE_URL – Supabase *session pooler* connection string (port 5432),
+#                  from Supabase → Connect. Not the transaction pooler (6543).
+name: "Content: import CSV"
+
+on:
+  workflow_dispatch:
+    inputs:
+      csv_path:
+        description: "Path of the CSV in the repo"
+        type: string
+        default: content/seed/seed_14_days.csv
+      mode:
+        description: "validate = check the file only (no database); import = validate, show the diff and apply"
+        type: choice
+        options: [validate, import]
+        default: validate
+      allow_removals:
+        description: "Allow removing answers/questions that already exist in the database"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-database
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      CSV_PATH: ${{ inputs.csv_path }}
+      MODE: ${{ inputs.mode }}
+      ALLOW_REMOVALS: ${{ inputs.allow_removals }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run importer
+        run: |
+          if [ ! -f "$CSV_PATH" ]; then echo "::error::File not found in repo: $CSV_PATH"; exit 1; fi
+          if [ "$MODE" = "validate" ]; then
+            npm run import -- "$CSV_PATH" --validate-only
+            exit 0
+          fi
+          if [ -z "$DATABASE_URL" ]; then echo "::error::Missing repository secret DATABASE_URL"; exit 1; fi
+          args=("$CSV_PATH" --yes)
+          if [ "$ALLOW_REMOVALS" = "true" ]; then args+=(--allow-removals); fi
+          npm run import -- "${args[@]}"
