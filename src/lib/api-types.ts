@@ -14,14 +14,21 @@ export interface AnsweredQuestion {
   matched: string | null;
 }
 
+/** A question as the player sees it: never its answers. */
+export interface QuestionText {
+  position: number;
+  category: string;
+  text: string;
+}
+
+/** The open question on the chained clock. Its servedAt may be a moment in the future (between questions). */
 export interface CurrentQuestion {
   position: number;
-  text: string;
-  category: string;
   servedAt: string;
   /** Display deadline (served + 30 s). The server accepts 2 s of network grace on top. */
   deadline: string;
-  serverNow: string;
+  /** Wrong answers already tried on this question (distinct spellings). */
+  attempts: number;
 }
 
 export interface RunState {
@@ -32,19 +39,30 @@ export interface RunState {
   totalKm: number;
   finished: boolean;
   answered: AnsweredQuestion[];
+  /** All seven question texts once the journey has begun, else null. */
+  questions: QuestionText[] | null;
   current: CurrentQuestion | null;
   questionCount: number;
+  serverNow: string;
+  timing: { questionMs: number; transitionMs: number; minAttemptGapMs: number };
 }
 
 export interface AnswerResult {
   position: number;
   correct: boolean;
   timedOut: boolean;
+  /** Wrong, and the same answer (after normalization) was already tried: not counted. */
+  duplicate?: boolean;
+  /** Attempts left on this question after a wrong answer. */
+  attemptsLeft?: number;
   score: number;
   tier: TierId | null;
   matched: string | null;
   totalKm: number;
   finished: boolean;
+  /** When the question ended (correct or timed out): the next question and when its clock starts. */
+  next: { position: number; servedAt: string } | null;
+  serverNow: string;
 }
 
 export interface RevealedAnswer {

@@ -29,10 +29,14 @@ async function answer(userId: string, questionId: string, raw: string, answerId:
   const [run] = await t.db<{ id: string }[]>`
     insert into runs (user_id, journey_id, mode) values (${userId}, ${j!.journey_id}, 'daily')
     on conflict (user_id, journey_id) where mode = 'daily' do update set mode = 'daily' returning id`;
-  await t.db`
-    insert into responses (run_id, user_id, question_id, position, counts_for_stats, answered_at, raw_text, norm_text, answer_id, match)
+  const [resp] = await t.db<{ id: string }[]>`
+    insert into responses (run_id, user_id, question_id, position, counts_for_stats, answered_at, raw_text, norm_text, answer_id, match, attempts)
     values (${run!.id}, ${userId}, ${questionId}, ${j!.position}, true, now(), ${raw}, ${normalizeAnswer(raw)},
-      ${answerId}, ${answerId ? "exact" : "none"})`;
+      ${answerId}, ${answerId ? "exact" : "none"}, 1)
+    returning id`;
+  await t.db`
+    insert into attempts (response_id, question_id, raw_text, norm_text, answer_id, match)
+    values (${resp!.id}, ${questionId}, ${raw}, ${normalizeAnswer(raw)}, ${answerId}, ${answerId ? "exact" : "none"})`;
 }
 
 describe("import pipeline", () => {

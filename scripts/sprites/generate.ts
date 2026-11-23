@@ -48,7 +48,8 @@ import {
   panelNight,
   routeMarkerFrames,
   tierBadgeFrames,
-  waterskinFrames,
+  waterskin,
+  waterskinMask,
 } from "./ui";
 
 const OUT = join(process.cwd(), "public", "sprites");
@@ -141,7 +142,8 @@ write("sparkle", sparkleFrames(), { fps: 12, loop: true, anchor: [0.5, 0.5] });
 // ── Results and UI ────────────────────────────────────────
 write("route_marker", routeMarkerFrames(), { fps: 0, anchor: [0.5, 1] }); // 0 miss, 1 camp … 5 star
 write("tier_badge", tierBadgeFrames(), { fps: 0 }); // 0 camp … 4 star
-write("waterskin", waterskinFrames(), { fps: 0 }); // 0 full … 10 empty
+write("waterskin", [waterskin()], { fps: 0 }); // the empty flask
+write("waterskin_mask", [waterskinMask()], { fps: 0 }); // pixels the water may fill
 write("waterskin_drip", dripFrames(), { fps: 8, loop: true });
 write("ui_panel", [panel()], { fps: 0 });
 write("ui_panel_night", [panelNight()], { fps: 0 });

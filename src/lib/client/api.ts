@@ -57,7 +57,7 @@ export const api = {
   startDaily: () => post<RunState>("/api/runs", { mode: "daily" }),
   startUnlimited: (date: string) => post<RunState>("/api/runs", { mode: "unlimited", date }),
   run: (id: string) => call<RunState>(`/api/runs/${id}`),
-  next: (id: string) => post<RunState>(`/api/runs/${id}/next`),
+  begin: (id: string) => post<RunState>(`/api/runs/${id}/begin`),
   answer: (id: string, position: number, answer: string) =>
     post<AnswerResult>(`/api/runs/${id}/answer`, { position, answer }),
   results: (id: string) => call<RunResults>(`/api/runs/${id}/results`),

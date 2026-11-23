@@ -62,6 +62,30 @@ async function main() {
         const resp = await tx<{ id: string; raw_text: string | null }[]>`
           select id, raw_text from responses where question_id = ${q.id} and raw_text is not null`;
         for (const r of resp) await tx`update responses set norm_text = ${normalizeAnswer(r.raw_text)} where id = ${r.id}`;
+        // Attempts too. Two spellings that now normalize the same are one attempt: keep the earliest.
+        const tries = await tx<{ id: string; response_id: string; raw_text: string }[]>`
+          select id::text, response_id, raw_text from attempts where question_id = ${q.id} order by response_id, created_at, id`;
+        const seen = new Set<string>();
+        const drop: string[] = [];
+        const keep: Array<{ id: string; norm: string }> = [];
+        for (const a of tries) {
+          const norm = normalizeAnswer(a.raw_text);
+          const key = `${a.response_id}\u0000${norm}`;
+          if (seen.has(key)) drop.push(a.id);
+          else {
+            seen.add(key);
+            keep.push({ id: a.id, norm });
+          }
+        }
+        if (drop.length > 0) await tx`delete from attempts where id = any(${drop}::bigint[])`;
+        // Two passes so a swap of spellings never trips the uniqueness constraint mid-update.
+        if (keep.length > 0) {
+          await tx`update attempts set norm_text = '\u0001' || id::text where id = any(${keep.map((k) => k.id)}::bigint[])`;
+          await tx`
+            update attempts t set norm_text = u.norm
+            from unnest(${keep.map((k) => k.id)}::bigint[], ${keep.map((k) => k.norm)}::text[]) as u(id, norm)
+            where t.id = u.id`;
+        }
       }
       rematched += (await rematchQuestion(tx, q.id)).changed;
       rescored += (await recomputeQuestion(tx, q.id)).rescored;

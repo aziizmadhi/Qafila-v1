@@ -2,19 +2,30 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { scene } from "@/game/bridge";
-import type { AnswerResult, RunMode, RunState } from "@/lib/api-types";
+import type { AnswerResult, CurrentQuestion, RunMode, RunState } from "@/lib/api-types";
 import { categoryName } from "@/lib/categories";
+import { AttemptGate, cleanAnswer } from "@/lib/attempts";
 import { ApiError, api } from "@/lib/client/api";
 import { formatDate } from "@/lib/client/format";
+import { loadSuggestionPools } from "@/lib/client/suggestions";
+import type { SuggestionIndex } from "@/lib/suggest";
 import { tierById } from "@/lib/tiers";
+import { QUESTION_MS, TRANSITION_MS, nextQuestionStart } from "@/lib/timing";
+import { AnswerBox } from "./AnswerBox";
 import { Progress } from "./Progress";
 import { TierIcon } from "./TierIcon";
 import { Button, ButtonLink, ErrorNote, Km, Loading, Panel } from "./ui";
 import { Waterskin } from "./Waterskin";
 
-type Phase = "loading" | "intro" | "question" | "submitting" | "result" | "between" | "error";
+/**
+ * loading → intro → (question ⇄ result)… → results page.
+ * After "انطلق" the clock is chained on the server: each question starts
+ * TRANSITION_MS after the previous one ends, so moving on needs no request.
+ * All seven question texts are already in memory.
+ */
+type Phase = "loading" | "intro" | "question" | "result" | "error";
 
-const QUESTION_MS = 30_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const router = useRouter();
@@ -31,7 +42,24 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const [traveling, setTraveling] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const offsetRef = useRef(0); // server clock − client clock
-  const submittingRef = useRef(false);
+  const pendingRef = useRef(false);
+  const timeUpWhilePendingRef = useRef(false);
+  // Empty answers, repeats of a wrong answer (shake at once, no request) and attempt spacing.
+  const gateRef = useRef(new AttemptGate());
+  const [hurt, setHurt] = useState(0);
+  const [notice, setNotice] = useState("");
+  const [locked, setLocked] = useState(false);
+  // Ticks while waiting for the next question's clock to start.
+  const [, setTick] = useState(0);
+  const [answer, setAnswer] = useState("");
+  // Suggestion pools for this journey's categories, loaded once in the background.
+  const [pools, setPools] = useState<Record<string, SuggestionIndex>>({});
+
+  /** Server time now, in client milliseconds. */
+  const serverNow = () => Date.now() + offsetRef.current;
+  const syncClock = (serverIso: string, sentAt: number) => {
+    offsetRef.current = Date.parse(serverIso) - (sentAt + Date.now()) / 2;
+  };
 
   const fail = useCallback(
     (e: unknown) => {
@@ -47,28 +75,30 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   );
 
   const applyState = useCallback(
-    (s: RunState) => {
+    (s: RunState, sentAt: number) => {
+      syncClock(s.serverNow, sentAt);
       setRun(s);
+      setResult(null);
       if (s.finished) {
         router.replace(`/results/${s.id}`);
         return;
       }
-      if (s.current) {
-        offsetRef.current = Date.parse(s.current.serverNow) - Date.now();
-        scene.setHour(s.current.position - 1);
-        setPhase("question");
-      } else {
-        scene.setHour(s.answered.length);
-        setPhase(s.answered.length === 0 ? "intro" : "between");
+      if (!s.questions || !s.current) {
+        scene.setHour(0);
+        setPhase("intro");
+        return;
       }
+      scene.setHour(s.current.position - 1);
+      setPhase(Date.parse(s.current.servedAt) <= serverNow() ? "question" : "result");
     },
     [router, setRun],
   );
 
   const load = useCallback(async () => {
     setPhase("loading");
+    const sentAt = Date.now();
     try {
-      applyState(mode === "daily" ? await api.startDaily() : await api.startUnlimited(date!));
+      applyState(mode === "daily" ? await api.startDaily() : await api.startUnlimited(date!), sentAt);
     } catch (e) {
       fail(e);
     }
@@ -80,90 +110,240 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
     return () => scene.setPhase("home");
   }, [load]);
 
-  const next = useCallback(async () => {
+  const begin = useCallback(async () => {
     const current = runRef.current;
     if (!current) return;
-    setResult(null);
     setPhase("loading");
+    const sentAt = Date.now();
     try {
-      applyState(await api.next(current.id));
+      applyState(await api.begin(current.id), sentAt);
     } catch (e) {
       fail(e);
     }
   }, [applyState, fail]);
 
-  const submit = useCallback(
-    async (text: string) => {
-      const run = runRef.current;
-      if (!run?.current || submittingRef.current) return;
-      submittingRef.current = true;
-      const position = run.current.position;
-      setPhase("submitting");
-      try {
-        const r = await api.answer(run.id, position, text);
-        setResult(r);
-        setRun({
-          ...run,
-          totalKm: r.totalKm,
-          finished: r.finished,
-          current: null,
-          answered: [
-            ...run.answered,
-            {
-              position,
-              category: run.current.category,
-              score: r.score,
-              correct: r.correct,
-              timedOut: r.timedOut,
-              answer: text,
-              matched: r.matched,
-            },
-          ],
-        });
-        setPhase("result");
-        setTraveling(true);
-        void scene.travel(r.score, r.tier).finally(() => setTraveling(false));
-      } catch (e) {
-        if (e instanceof ApiError && (e.code === "already_answered" || e.code === "not_served")) {
-          applyState(await api.run(run.id));
-        } else {
-          fail(e);
+  const recover = useCallback(
+    async (e: unknown) => {
+      const current = runRef.current;
+      if (current && e instanceof ApiError && (e.code === "already_answered" || e.code === "not_served")) {
+        const sentAt = Date.now();
+        try {
+          applyState(await api.run(current.id), sentAt);
+        } catch (err) {
+          fail(err);
         }
-      } finally {
-        submittingRef.current = false;
+      } else {
+        fail(e);
       }
     },
-    [applyState, fail, setRun],
+    [applyState, fail],
   );
 
-  // The waterskin: counts down from the server deadline; auto-submits at zero.
+  /** A question is over (first correct answer, or the clock ran out): show it and move the caravan at once. */
+  const finishQuestion = useCallback(
+    (r: AnswerResult, answer: string | null) => {
+      const current = runRef.current;
+      if (!current?.current || current.current.position !== r.position) return;
+      const position = r.position;
+      const next: CurrentQuestion | null = r.next
+        ? {
+            position: r.next.position,
+            servedAt: r.next.servedAt,
+            deadline: new Date(Date.parse(r.next.servedAt) + QUESTION_MS).toISOString(),
+            attempts: 0,
+          }
+        : null;
+      setRun({
+        ...current,
+        totalKm: r.totalKm,
+        finished: r.finished,
+        current: next,
+        answered: [
+          ...current.answered,
+          {
+            position,
+            category: current.questions?.[position - 1]?.category ?? "",
+            score: r.score,
+            correct: r.correct,
+            timedOut: r.timedOut,
+            answer,
+            matched: r.matched,
+          },
+        ],
+      });
+      setResult(r);
+      setNotice("");
+      setLocked(false);
+      setPhase("result");
+      if (r.correct) setAnswer("");
+      setTraveling(true);
+      void scene.travel(r.score, r.tier).finally(() => setTraveling(false));
+    },
+    [setRun],
+  );
+
+  /** Wrong answer: shake the waterskin, clear the box, keep the keyboard up. */
+  const wrong = useCallback((raw: string, message: string) => {
+    setHurt((h) => h + 1);
+    setNotice(message);
+    setAnswer((a) => (cleanAnswer(a) === raw ? "" : a)); // keep anything typed since
+    inputRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  /** The waterskin ran dry. The server's clock does the same on its own: no request needed. */
+  const timeUp = useCallback(() => {
+    const current = runRef.current?.current;
+    const state = runRef.current;
+    if (!current || !state) return;
+    if (pendingRef.current) {
+      // An answer is on its way: let the server's verdict decide.
+      timeUpWhilePendingRef.current = true;
+      return;
+    }
+    const servedAt = Date.parse(current.servedAt);
+    const last = current.position >= state.questionCount;
+    finishQuestion(
+      {
+        position: current.position,
+        correct: false,
+        timedOut: true,
+        score: 0,
+        tier: null,
+        matched: null,
+        totalKm: state.totalKm,
+        finished: last,
+        next: last
+          ? null
+          : { position: current.position + 1, servedAt: new Date(nextQuestionStart(servedAt, null)).toISOString() },
+        serverNow: new Date(serverNow()).toISOString(),
+      },
+      null,
+    );
+  }, [finishQuestion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const submit = useCallback(
+    async (text: string) => {
+      const state = runRef.current;
+      if (phase !== "question" || !state?.current || locked) return;
+      const position = state.current.position;
+      const gate = gateRef.current;
+      const check = gate.check(position, text, Date.now());
+      if (check.kind === "empty") return;
+      if (check.kind === "duplicate") {
+        wrong(check.raw, "جرّبت هذه الإجابة من قبل.");
+        return;
+      }
+      const { raw, norm } = check;
+      if (pendingRef.current) return;
+      pendingRef.current = true;
+      timeUpWhilePendingRef.current = false;
+      try {
+        if (check.waitMs > 0) await sleep(check.waitMs);
+        gate.sent(Date.now());
+        const sentAt = Date.now();
+        const r = await api.answer(state.id, position, raw);
+        syncClock(r.serverNow, sentAt);
+        pendingRef.current = false;
+        if (r.correct || r.timedOut) {
+          finishQuestion(r, raw);
+          return;
+        }
+        gate.wrong(position, norm);
+        if (timeUpWhilePendingRef.current) {
+          timeUp();
+          return;
+        }
+        wrong(raw, r.duplicate ? "جرّبت هذه الإجابة من قبل." : "ليست هذه. حاول مرة أخرى!");
+        if (r.attemptsLeft === 0) setLocked(true);
+      } catch (e) {
+        pendingRef.current = false;
+        if (timeUpWhilePendingRef.current) {
+          timeUp();
+          return;
+        }
+        if (e instanceof ApiError && e.code === "too_fast") return; // the next try goes through
+        if (e instanceof ApiError && e.code === "too_many_attempts") {
+          setLocked(true);
+          setNotice(e.message);
+          return;
+        }
+        await recover(e);
+      } finally {
+        pendingRef.current = false;
+      }
+    },
+    [finishQuestion, locked, phase, recover, timeUp, wrong], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // The waterskin counts down from the server deadline; at zero the question closes.
   useEffect(() => {
     if (phase !== "question" || !run?.current) return;
     const deadline = Date.parse(run.current.deadline);
     let raf = 0;
     const tick = () => {
-      const left = deadline - (Date.now() + offsetRef.current);
+      const left = deadline - serverNow();
       setRemainingMs(Math.max(0, left));
       if (left <= 0) {
-        void submit(inputRef.current?.value ?? "");
+        timeUp();
         return;
       }
       raf = requestAnimationFrame(tick);
     };
     tick();
-    const t = window.setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 50);
+    inputRef.current?.focus({ preventScroll: true });
+    return () => cancelAnimationFrame(raf);
+  }, [phase, run?.current, timeUp]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Between questions: start the next one exactly when its (server) clock starts.
+  useEffect(() => {
+    if (phase !== "result" || !run) return;
+    if (run.finished || !run.current) {
+      const t = window.setTimeout(() => router.push(`/results/${run.id}`), TRANSITION_MS);
+      return () => window.clearTimeout(t);
+    }
+    const startsAt = Date.parse(run.current.servedAt);
+    const iv = window.setInterval(() => setTick((n) => n + 1), 250);
+    const t = window.setTimeout(
+      () => {
+        setResult(null);
+        scene.setHour(run.current!.position - 1);
+        setPhase("question");
+      },
+      Math.max(0, startsAt - serverNow()),
+    );
     return () => {
-      cancelAnimationFrame(raf);
       window.clearTimeout(t);
+      window.clearInterval(iv);
     };
-  }, [phase, run?.current, submit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [phase, run, router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const categoriesKey = run?.questions?.map((q) => q.category).join(",") ?? "";
+  useEffect(() => {
+    if (!categoriesKey) return;
+    let live = true;
+    void loadSuggestionPools(categoriesKey.split(",")).then((p) => live && setPools(p));
+    return () => {
+      live = false;
+    };
+  }, [categoriesKey]);
+
+  // A new question: fresh notice, unlocked input.
+  const position = run?.current?.position;
+  useEffect(() => {
+    setNotice("");
+    setLocked(false);
+  }, [position]);
 
   if (phase === "loading" && !run) return <Loading />;
   if (phase === "error") return <ErrorNote message={error} onRetry={() => void load()} />;
   if (!run) return <Loading />;
 
-  const currentPos = run.current?.position ?? null;
+  const inJourney = phase === "question" || phase === "result";
+  const shown = phase === "question" ? run.current : null;
+  const q = shown ? run.questions?.[shown.position - 1] : null;
   const seconds = Math.ceil(remainingMs / 1000);
+  const startsIn = phase === "result" && run.current ? Math.max(0, Date.parse(run.current.servedAt) - serverNow()) : 0;
+  const progressCurrent = phase === "question" ? (run.current?.position ?? null) : null;
 
   return (
     <div className="flex flex-1 flex-col gap-3">
@@ -176,7 +356,7 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
           <span className="text-dark-brown">{formatDate(run.date)}</span>
           <Km value={run.totalKm} className="text-lg" />
         </div>
-        <Progress answered={run.answered} current={currentPos} />
+        <Progress answered={run.answered} current={progressCurrent} />
       </Panel>
 
       {/* Spacer so the caravan stays visible between the panels. */}
@@ -187,73 +367,58 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
           <h2 className="mb-2 text-xl font-bold">رحلة اليوم</h2>
           <ul className="mb-4 list-inside list-disc space-y-1 text-[0.95rem]">
             <li>سبعة أسئلة، ولكل سؤال 30 ثانية تنفد معها القربة.</li>
-            <li>اكتب أي إجابة صحيحة، وبأي لهجة أو تهجئة.</li>
+            <li>اكتب أي إجابة صحيحة، وبأي لهجة أو تهجئة. إن أخطأت فجرّب مجددًا حتى تنفد القربة.</li>
             <li>كلما كانت إجابتك أندر بين اللاعبين، قطعت القافلة مسافة أطول.</li>
+            <li>بعد الانطلاق لا تتوقف القافلة: يبدأ كل سؤال بعد السابق مباشرة.</li>
           </ul>
-          <Button className="w-full" onClick={() => void next()}>
+          <Button className="w-full" onClick={() => void begin()}>
             انطلق
           </Button>
         </Panel>
       ) : null}
 
-      {phase === "between" ? (
-        <Panel className="rise-in text-center">
-          <p className="mb-3 font-bold">
-            توقفت القافلة عند السؤال <span className="km">{run.answered.length}</span> من 7.
-          </p>
-          <Button className="w-full" onClick={() => void next()}>
-            واصل المسير
-          </Button>
-        </Panel>
-      ) : null}
+      {inJourney ? (
+        // One panel for the whole journey: the input stays mounted (and focused) between questions,
+        // so the phone keyboard doesn't drop and come back every time.
+        <Panel className="rise-in">
+          {phase === "question" && shown && q ? (
+            <div key={shown.position}>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-bold">
+                  السؤال <span className="km">{shown.position}</span> من 7
+                </span>
+                <span className="chip">{categoryName(q.category)}</span>
+              </div>
+              <h2 className="mb-3 text-[1.35rem] font-bold leading-snug">{q.text}</h2>
+              <Waterskin fraction={remainingMs / QUESTION_MS} seconds={seconds} hurt={hurt} />
+            </div>
+          ) : (
+            <ResultBody result={result} traveling={traveling} startsIn={startsIn} finished={run.finished} />
+          )}
 
-      {(phase === "question" || phase === "submitting") && run.current ? (
-        <Panel className="rise-in" key={run.current.position}>
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-sm font-bold">
-              السؤال <span className="km">{run.current.position}</span> من 7
-            </span>
-            <span className="chip">{categoryName(run.current.category)}</span>
-          </div>
-          <h2 className="mb-3 text-[1.35rem] font-bold leading-snug">{run.current.text}</h2>
-          <Waterskin fraction={remainingMs / QUESTION_MS} seconds={seconds} />
-          <form
-            className="mt-3 flex flex-col gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submit(inputRef.current?.value ?? "");
-            }}
-          >
-            <label htmlFor="answer" className="sr-only">
-              إجابتك
-            </label>
-            <input
-              id="answer"
-              ref={inputRef}
-              className="pixel-input"
-              dir="auto"
-              type="text"
-              inputMode="text"
-              enterKeyHint="send"
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              maxLength={120}
-              placeholder="اكتب إجابتك…"
-              disabled={phase === "submitting"}
-            />
-            <Button type="submit" disabled={phase === "submitting"}>
-              {phase === "submitting" ? "جارٍ التحقق…" : "أرسل الإجابة"}
+          {run.finished && phase === "result" ? (
+            <Button className="mt-3 w-full" onClick={() => router.push(`/results/${run.id}`)}>
+              إلى المخيّم: النتيجة
             </Button>
-          </form>
+          ) : (
+            <div className="mt-3 flex flex-col gap-2">
+              <AnswerBox
+                inputRef={inputRef}
+                value={answer}
+                onChange={setAnswer}
+                onSubmit={() => void submit(answer)}
+                pool={q ? (pools[q.category] ?? null) : null}
+                disabled={locked}
+                canSend={phase === "question"}
+                placeholder={phase === "question" ? "اكتب إجابتك…" : "استعد للسؤال التالي…"}
+              />
+              <p id="answer-notice" className="min-h-5 text-center text-sm font-bold text-terracotta" aria-live="assertive">
+                {notice}
+              </p>
+            </div>
+          )}
         </Panel>
       ) : null}
-
-      {phase === "result" && result ? <ResultCard result={result} traveling={traveling} onNext={() => {
-        if (result.finished) router.push(`/results/${run.id}`);
-        else void next();
-      }} /> : null}
 
       {phase === "loading" ? <Loading label="…" /> : null}
 
@@ -271,43 +436,52 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   );
 }
 
-function ResultCard({ result, traveling, onNext }: { result: AnswerResult; traveling: boolean; onNext: () => void }) {
-  const tier = result.tier ? tierById(result.tier) : null;
+function ResultBody({
+  result,
+  traveling,
+  startsIn,
+  finished,
+}: {
+  result: AnswerResult | null;
+  traveling: boolean;
+  startsIn: number;
+  finished: boolean;
+}) {
+  const tier = result?.tier ? tierById(result.tier) : null;
+  const footer = finished ? (
+    <p className="mt-2 text-sm font-bold">{traveling ? "القافلة تسير…" : "وصلت القافلة إلى المخيّم."}</p>
+  ) : (
+    <p className="mt-2 text-sm font-bold text-dark-brown">
+      السؤال التالي بعد <span className="km">{Math.max(1, Math.ceil(startsIn / 1000))}</span>…
+    </p>
+  );
   return (
-    <Panel className="rise-in text-center" as="div">
-      <div aria-live="polite">
-        {result.timedOut ? (
-          <>
-            <p className="text-3xl" aria-hidden>
-              💧
+    <div className="text-center" aria-live="polite">
+      {!result ? (
+        <p className="py-6 text-lg font-bold">استعد للسؤال التالي…</p>
+      ) : result.timedOut ? (
+        <>
+          <p className="text-3xl" aria-hidden>
+            💧
+          </p>
+          <p className="text-xl font-bold">نفدت القربة!</p>
+          <p className="text-sm">لم تصل إجابة صحيحة في الوقت. بقيت القافلة في مكانها.</p>
+        </>
+      ) : result.correct ? (
+        <>
+          <TierIcon score={result.score} scale={4} className="mx-auto" />
+          <p className="text-2xl font-bold">
+            + <Km value={result.score} />
+          </p>
+          <p className="font-bold text-dark-brown">{tier?.name}</p>
+          {result.matched ? (
+            <p className="mt-1 text-sm">
+              احتُسبت إجابتك: <b>{result.matched}</b>
             </p>
-            <p className="text-xl font-bold">نفدت القربة!</p>
-            <p className="text-sm">لم تصل الإجابة في الوقت. بقيت القافلة في مكانها.</p>
-          </>
-        ) : result.correct ? (
-          <>
-            <TierIcon score={result.score} scale={4} className="mx-auto" />
-            <p className="text-2xl font-bold">
-              + <Km value={result.score} />
-            </p>
-            <p className="font-bold text-dark-brown">{tier?.name}</p>
-            {result.matched ? (
-              <p className="mt-1 text-sm">
-                احتُسبت إجابتك: <b>{result.matched}</b>
-              </p>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <TierIcon score={0} scale={4} className="mx-auto" />
-            <p className="text-xl font-bold">لم تجد القافلة هذه الإجابة</p>
-            <p className="text-sm">ستظهر الإجابات المقبولة في نهاية الرحلة.</p>
-          </>
-        )}
-      </div>
-      <Button className="mt-3 w-full" onClick={onNext} disabled={traveling}>
-        {result.finished ? "إلى المخيّم: النتيجة" : traveling ? "القافلة تسير…" : "السؤال التالي"}
-      </Button>
-    </Panel>
+          ) : null}
+        </>
+      ) : null}
+      {footer}
+    </div>
   );
 }

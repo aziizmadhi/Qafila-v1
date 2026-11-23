@@ -1,7 +1,7 @@
 {
   "version": 1,
   "baseGrid": 32,
-  "build": "8dba1c7ac4",
+  "build": "e5e5f12a56",
   "palette": [
     "#1a1222",
     "#2d2448",
@@ -370,7 +370,14 @@
       "file": "waterskin.png",
       "frameWidth": 32,
       "frameHeight": 32,
-      "frames": 11,
+      "frames": 1,
+      "fps": 0
+    },
+    "waterskin_mask": {
+      "file": "waterskin_mask.png",
+      "frameWidth": 32,
+      "frameHeight": 32,
+      "frames": 1,
       "fps": 0
     },
     "waterskin_drip": {

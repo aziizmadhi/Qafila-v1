@@ -3,7 +3,7 @@ import { applyContent } from "@/server/content/apply";
 import { diffContent, loadExisting } from "@/server/content/diff";
 import { parseContentCsv } from "@/server/content/validate";
 import { createMergeTicket, getProfile, getToday, listPastJourneys, mergeFromTicket } from "@/server/game/profile";
-import { getResults, getRunState, serveNext, startRun, submitAnswer } from "@/server/game/runs";
+import { beginRun, getResults, getRunState, startRun, submitAnswer } from "@/server/game/runs";
 import { finalizeDueJourneys } from "@/server/scoring/finalize";
 import { createTestDb, dayCsv, type TestDb } from "./harness";
 
@@ -31,81 +31,96 @@ afterEach(() => {
 const plus = (d: Date, ms: number) => new Date(d.getTime() + ms);
 
 describe("daily journey", () => {
-  it("serves questions one at a time on the server clock and scores them", async () => {
+  it("releases all seven questions at the start, then chains the clock on the server", async () => {
     const u = await t.createUser();
     let s = await startRun(t.db, u, { mode: "daily" }, NOON);
     expect(s.current).toBeNull();
+    expect(s.questions).toBeNull(); // nothing is revealed before "انطلق"
     expect(s.journeyNumber).toBe(2);
 
-    s = await serveNext(t.db, u, s.id, NOON);
-    expect(s.current?.position).toBe(1);
-    expect(s.current?.text).toContain("رقم 1");
-    // Idempotent: serving again returns the same open question with the same clock.
-    const again = await serveNext(t.db, u, s.id, plus(NOON, 5000));
-    expect(again.current?.servedAt).toBe(s.current?.servedAt);
+    s = await beginRun(t.db, u, s.id, NOON);
+    expect(s.questions).toHaveLength(7);
+    expect(s.questions![6]).toMatchObject({ position: 7, category: "geography" });
+    expect(s.questions![6]!.text).toContain("رقم 7");
+    expect(s.current).toMatchObject({ position: 1, servedAt: NOON.toISOString() });
+    // Idempotent: beginning again keeps the same clock.
+    const again = await beginRun(t.db, u, s.id, plus(NOON, 5000));
+    expect(again.current?.servedAt).toBe(NOON.toISOString());
 
+    // Q1 correct at +8 s; Q2's clock starts 3 s later, with no request.
     const r1 = await submitAnswer(t.db, u, s.id, 1, "جواب أول 1", plus(NOON, 8000));
     // seed 0.4, first response: live weight 1/200 → share ≈ 0.4·0.995 + 1·0.005 = 0.403 → 60
     expect(r1).toMatchObject({ correct: true, score: 60, matched: "جواب أول 1", tier: "camp", totalKm: 60 });
-
+    expect(r1.next).toEqual({ position: 2, servedAt: plus(NOON, 11_000).toISOString() });
     await expect(submitAnswer(t.db, u, s.id, 1, "مرة أخرى", plus(NOON, 9000))).rejects.toMatchObject({
       code: "already_answered",
     });
+    // Q2 can't be answered before its clock starts (beyond 1.5 s of clock skew).
     await expect(submitAnswer(t.db, u, s.id, 2, "x", plus(NOON, 9000))).rejects.toMatchObject({ code: "not_served" });
 
-    // Q2: a typo still matches (fuzzy), Q3: wrong, Q4: too late.
-    await serveNext(t.db, u, s.id, plus(NOON, 10_000));
-    const r2 = await submitAnswer(t.db, u, s.id, 2, "جواب ثالت 2", plus(NOON, 12_000));
+    // Q2: a typo still matches (fuzzy).
+    const r2 = await submitAnswer(t.db, u, s.id, 2, "جواب ثالت 2", plus(NOON, 13_000));
     expect(r2).toMatchObject({ correct: true, matched: "جواب ثالث 2" });
-    await serveNext(t.db, u, s.id, plus(NOON, 20_000));
-    const r3 = await submitAnswer(t.db, u, s.id, 3, "شيء آخر", plus(NOON, 22_000));
-    expect(r3).toMatchObject({ correct: false, score: 0, matched: null, tier: null });
-    await serveNext(t.db, u, s.id, plus(NOON, 30_000));
-    const r4 = await submitAnswer(t.db, u, s.id, 4, "جواب أول 4", plus(NOON, 30_000 + 33_000));
-    expect(r4).toMatchObject({ timedOut: true, score: 0, correct: false });
+    expect(r2.next?.servedAt).toBe(plus(NOON, 16_000).toISOString());
+
+    // Q3: wrong answers keep the question open…
+    const T3 = plus(NOON, 16_000);
+    const r3 = await submitAnswer(t.db, u, s.id, 3, "شيء آخر", plus(T3, 2000));
+    expect(r3).toMatchObject({ correct: false, timedOut: false, duplicate: false, attemptsLeft: 24, score: 0, next: null });
+    const r3dup = await submitAnswer(t.db, u, s.id, 3, "  شيء  آخر! ", plus(T3, 3000));
+    expect(r3dup).toMatchObject({ correct: false, duplicate: true, attemptsLeft: 24 });
+    await expect(submitAnswer(t.db, u, s.id, 3, "غيره", plus(T3, 3200))).rejects.toMatchObject({ code: "too_fast" });
+    // …until the clock runs out. Nothing needs to call the server: the next request catches up.
+    const st = await getRunState(t.db, u, s.id, plus(T3, 40_000));
+    expect(st.answered.find((a) => a.position === 3)).toMatchObject({ timedOut: true, score: 0 });
+    expect(st.current).toMatchObject({ position: 4, servedAt: plus(T3, 33_000).toISOString() });
+
+    // Q4: an answer after the deadline + grace is a timeout; Q5 started 3 s after Q4's deadline.
+    const T4 = plus(T3, 33_000);
+    const r4 = await submitAnswer(t.db, u, s.id, 4, "جواب أول 4", plus(T4, 32_500));
+    expect(r4).toMatchObject({ timedOut: true, correct: false, score: 0 });
+    expect(r4.next).toEqual({ position: 5, servedAt: plus(T4, 33_000).toISOString() });
+
+    // Q5: an answer inside the 2 s grace counts; the next clock starts from the displayed deadline.
+    const T5 = plus(T4, 33_000);
+    const r5 = await submitAnswer(t.db, u, s.id, 5, "جواب ثان 5", plus(T5, 31_000));
+    expect(r5).toMatchObject({ correct: true });
+    expect(r5.next?.servedAt).toBe(plus(T5, 33_000).toISOString());
 
     // Results are hidden until the run is finished.
-    await expect(getResults(t.db, u, s.id, plus(NOON, 70_000))).rejects.toMatchObject({ code: "not_finished" });
+    await expect(getResults(t.db, u, s.id, plus(T5, 32_000))).rejects.toMatchObject({ code: "not_finished" });
 
-    // Q5 is served and abandoned: the next request closes it as a timeout.
-    await serveNext(t.db, u, s.id, plus(NOON, 80_000));
-    const st = await getRunState(t.db, u, s.id, plus(NOON, 200_000));
-    expect(st.answered.find((a) => a.position === 5)?.timedOut).toBe(true);
-    expect(st.current).toBeNull();
-
-    for (let p = 6; p <= 7; p++) {
-      const when = plus(NOON, 300_000 + p * 10_000);
-      await serveNext(t.db, u, s.id, when);
-      await submitAnswer(t.db, u, s.id, p, `جواب ثان ${p}`, plus(when, 3000));
-    }
-    const done = await getRunState(t.db, u, s.id, plus(NOON, 400_000));
+    // The player leaves: Q6 and Q7 run out on their own and the run finishes.
+    const done = await getRunState(t.db, u, s.id, plus(T5, 33_000 * 3 + 1000));
     expect(done.finished).toBe(true);
-    await expect(serveNext(t.db, u, s.id, plus(NOON, 401_000))).rejects.toMatchObject({ code: "finished" });
+    expect(done.current).toBeNull();
+    expect(done.answered.map((a) => a.timedOut)).toEqual([false, false, true, true, false, true, true]);
 
-    const res = await getResults(t.db, u, s.id, plus(NOON, 402_000));
+    const res = await getResults(t.db, u, s.id, plus(T5, 200_000));
     expect(res.provisional).toBe(true);
     expect(res.questions).toHaveLength(7);
     expect(res.questions[0]!.answers.map((a) => a.canonical)).toEqual(["جواب أول 1", "جواب ثان 1", "جواب ثالث 1"]);
     expect(res.questions[0]!.answers[0]!.yours).toBe(true);
+    expect(res.questions[2]).toMatchObject({ timedOut: true, correct: false, answer: "شيء آخر" }); // last attempt
     expect(res.totalKm).toBe(done.totalKm);
 
     // Resuming the daily run returns the same run.
-    const resumed = await startRun(t.db, u, { mode: "daily" }, plus(NOON, 403_000));
+    const resumed = await startRun(t.db, u, { mode: "daily" }, plus(T5, 300_000));
     expect(resumed.id).toBe(s.id);
   });
 
-  it("counts wrong answers and timeouts in the rarity denominator", async () => {
-    const [q] = await t.db<{ live_total: number }[]>`
-      select s.live_total from question_stats s join questions q on q.id = s.question_id
-      join journeys j on j.id = q.journey_id where j.play_date = ${TODAY} and q.position = 4`;
-    expect(q!.live_total).toBe(1); // the timeout from the previous test
+  it("counts each player once in the rarity denominator, wrong attempts or not", async () => {
+    const totals = await t.db<{ position: number; live_total: number }[]>`
+      select q.position, s.live_total from question_stats s join questions q on q.id = s.question_id
+      join journeys j on j.id = q.journey_id where j.play_date = ${TODAY} order by q.position`;
+    expect(totals.map((r) => r.live_total)).toEqual([1, 1, 1, 1, 1, 1, 1]);
   });
 
-  it("refuses to serve today's questions after the day (and grace) is over", async () => {
+  it("refuses to begin today's journey after the day (and grace) is over", async () => {
     const u = await t.createUser();
     const s = await startRun(t.db, u, { mode: "daily" }, NOON);
     process.env.QAFILA_FAKE_TODAY = "2026-11-21";
-    await expect(serveNext(t.db, u, s.id, at("2026-11-20T21:30:00Z"))).rejects.toMatchObject({ code: "day_over" });
+    await expect(beginRun(t.db, u, s.id, at("2026-11-20T21:30:00Z"))).rejects.toMatchObject({ code: "day_over" });
   });
 });
 
@@ -115,9 +130,10 @@ describe("unlimited", () => {
     const u = await t.createUser();
     await expect(startRun(t.db, u, { mode: "unlimited", date: TODAY }, NOON)).rejects.toMatchObject({ code: "not_past" });
     const s = await startRun(t.db, u, { mode: "unlimited", date: "2026-11-19" }, NOON);
+    await beginRun(t.db, u, s.id, NOON);
     for (let p = 1; p <= 7; p++) {
-      await serveNext(t.db, u, s.id, plus(NOON, p * 10_000));
-      const r = await submitAnswer(t.db, u, s.id, p, `جواب أول ${p}`, plus(NOON, p * 10_000 + 2000));
+      // Each answer comes 2 s into its question; the next starts 3 s later.
+      const r = await submitAnswer(t.db, u, s.id, p, `جواب أول ${p}`, plus(NOON, (p - 1) * 5000 + 2000));
       expect(r.score).toBe(60); // seed only: nobody played 2026-11-19 as a daily
     }
     const after = await t.db<{ n: number }[]>`select coalesce(sum(live_total), 0)::int as n from question_stats`;

@@ -76,7 +76,7 @@ The diff marks each day as `past`, `LIVE TODAY` or `upcoming`. Changing a past o
 
 ## 4. Review unmatched answers
 
-Every answer that matched nothing is kept. Export them, most frequent first:
+Players can retry a question until they get it right or run out of time, and every wrong attempt is kept (a spelling repeated by the same player on the same question is kept once). Export them, most frequent first:
 
 ```bash
 npm run export-unmatched -- --since=2026-11-16
@@ -87,7 +87,7 @@ npm run export-unmatched -- --since=2026-11-16
 |---|---|
 | `answer`, `spellings` | what players typed (most common spelling first) |
 | `normalized` | the matching key |
-| `count`, `share_of_responses` | how many players typed it |
+| `count`, `share_of_players` | how many players typed it (each player counts once per spelling, however many times they retried) |
 | `closest_canonical`, `edit_distance` | the nearest accepted answer, to spot near-misses |
 
 Options: `--until=YYYY-MM-DD`, `--min-count=3`, `--out=file.csv`.
@@ -98,7 +98,7 @@ For each valid answer, add it to the sheet, either as a variant of an existing c
 
 When an import changes which spellings a question accepts, the importer, in the same transaction:
 
-1. re-matches every stored response to that question (daily and Unlimited);
+1. re-matches every stored attempt at that question (daily and Unlimited). For each player, the earliest attempt that now matches becomes their answer, so a wrong attempt made before their accepted one can still win, and a timeout can become correct;
 2. rebuilds the live rarity counters;
 3. recomputes every affected score and journey total.
 
@@ -106,7 +106,25 @@ Players who typed a newly accepted answer get their distance back, and everyone 
 
 If you ever change the normalizer itself, run `npm run rescore -- --all --renormalize`.
 
-## 6. Seed content
+## 6. Answer suggestions and vocabulary
+
+While typing, players see up to four suggestions. They come from a pool per category: every canonical answer of every question in that category, plus extra vocabulary. Being suggested never means being correct, as long as the pool has plenty of plausible wrong names. Only canonical names are suggested (never variants).
+
+Add vocabulary from a two-column CSV (template: `content/template/vocabulary_template.csv`):
+
+```csv
+category,name
+geography,طوكيو
+sports,الزمالك
+```
+
+```bash
+npm run import-vocabulary -- my-vocabulary.csv
+```
+
+Names that already exist in that category (after normalization) are skipped. Good candidates are other countries, cities, players or dishes from the same category, especially ones close to real answers.
+
+## 7. Seed content
 
 `content/seed/seed_14_days.csv` holds 14 days (2026-11-16 → 2026-11-29): 98 questions in eight categories, each with 10–40 accepted answers and regional variants. Import it like any other file. To re-date it for testing, set `QAFILA_FAKE_TODAY` in `.env.local` instead of editing dates.
 
