@@ -6,9 +6,12 @@ import type { AnswerResult, CurrentQuestion, RunMode, RunState } from "@/lib/api
 import { categoryName } from "@/lib/categories";
 import { ApiError, api } from "@/lib/client/api";
 import { formatDate } from "@/lib/client/format";
+import { loadSuggestionPools } from "@/lib/client/suggestions";
 import { normalizeAnswer } from "@/lib/normalize";
+import type { SuggestionIndex } from "@/lib/suggest";
 import { tierById } from "@/lib/tiers";
 import { MIN_ATTEMPT_GAP_MS, QUESTION_MS, TRANSITION_MS, nextQuestionStart } from "@/lib/timing";
+import { AnswerBox } from "./AnswerBox";
 import { Progress } from "./Progress";
 import { TierIcon } from "./TierIcon";
 import { Button, ButtonLink, ErrorNote, Km, Loading, Panel } from "./ui";
@@ -50,6 +53,9 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const [locked, setLocked] = useState(false);
   // Ticks while waiting for the next question's clock to start.
   const [, setTick] = useState(0);
+  const [answer, setAnswer] = useState("");
+  // Suggestion pools for this journey's categories, loaded once in the background.
+  const [pools, setPools] = useState<Record<string, SuggestionIndex>>({});
 
   /** Server time now, in client milliseconds. */
   const serverNow = () => Date.now() + offsetRef.current;
@@ -171,7 +177,7 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
       setNotice("");
       setLocked(false);
       setPhase("result");
-      if (r.correct && inputRef.current) inputRef.current.value = "";
+      if (r.correct) setAnswer("");
       setTraveling(true);
       void scene.travel(r.score, r.tier).finally(() => setTraveling(false));
     },
@@ -182,11 +188,8 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
   const wrong = useCallback((raw: string, message: string) => {
     setHurt((h) => h + 1);
     setNotice(message);
-    const input = inputRef.current;
-    if (input) {
-      if (clean(input.value) === raw) input.value = "";
-      input.focus({ preventScroll: true });
-    }
+    setAnswer((a) => (clean(a) === raw ? "" : a)); // keep anything typed since
+    inputRef.current?.focus({ preventScroll: true });
   }, []);
 
   /** The waterskin ran dry. The server's clock does the same on its own: no request needed. */
@@ -318,6 +321,16 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
     };
   }, [phase, run, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const categoriesKey = run?.questions?.map((q) => q.category).join(",") ?? "";
+  useEffect(() => {
+    if (!categoriesKey) return;
+    let live = true;
+    void loadSuggestionPools(categoriesKey.split(",")).then((p) => live && setPools(p));
+    return () => {
+      live = false;
+    };
+  }, [categoriesKey]);
+
   // A new question: fresh notice, unlocked input.
   const position = run?.current?.position;
   useEffect(() => {
@@ -392,45 +405,21 @@ export function GameScreen({ mode, date }: { mode: RunMode; date?: string }) {
               إلى المخيّم: النتيجة
             </Button>
           ) : (
-            <form
-              className="mt-3 flex flex-col gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void submit(inputRef.current?.value ?? "");
-              }}
-            >
-              <label htmlFor="answer" className="sr-only">
-                إجابتك
-              </label>
-              <input
-                id="answer"
-                ref={inputRef}
-                className="pixel-input"
-                dir="auto"
-                type="text"
-                inputMode="text"
-                enterKeyHint="send"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                maxLength={120}
-                placeholder={phase === "question" ? "اكتب إجابتك…" : "استعد للسؤال التالي…"}
+            <div className="mt-3 flex flex-col gap-2">
+              <AnswerBox
+                inputRef={inputRef}
+                value={answer}
+                onChange={setAnswer}
+                onSubmit={() => void submit(answer)}
+                pool={q ? (pools[q.category] ?? null) : null}
                 disabled={locked}
-                aria-describedby="answer-notice"
+                canSend={phase === "question"}
+                placeholder={phase === "question" ? "اكتب إجابتك…" : "استعد للسؤال التالي…"}
               />
-              {/* preventDefault on pointer-down keeps focus (and the phone keyboard) on the input. */}
-              <Button
-                type="submit"
-                disabled={locked || phase !== "question"}
-                onPointerDown={(e) => e.preventDefault()}
-              >
-                أرسل الإجابة
-              </Button>
               <p id="answer-notice" className="min-h-5 text-center text-sm font-bold text-terracotta" aria-live="assertive">
                 {notice}
               </p>
-            </form>
+            </div>
           )}
         </Panel>
       ) : null}

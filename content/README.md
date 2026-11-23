@@ -106,7 +106,25 @@ Players who typed a newly accepted answer get their distance back, and everyone 
 
 If you ever change the normalizer itself, run `npm run rescore -- --all --renormalize`.
 
-## 6. Seed content
+## 6. Answer suggestions and vocabulary
+
+While typing, players see up to four suggestions. They come from a pool per category: every canonical answer of every question in that category, plus extra vocabulary. Being suggested never means being correct, as long as the pool has plenty of plausible wrong names. Only canonical names are suggested (never variants).
+
+Add vocabulary from a two-column CSV (template: `content/template/vocabulary_template.csv`):
+
+```csv
+category,name
+geography,طوكيو
+sports,الزمالك
+```
+
+```bash
+npm run import-vocabulary -- my-vocabulary.csv
+```
+
+Names that already exist in that category (after normalization) are skipped. Good candidates are other countries, cities, players or dishes from the same category, especially ones close to real answers.
+
+## 7. Seed content
 
 `content/seed/seed_14_days.csv` holds 14 days (2026-11-16 → 2026-11-29): 98 questions in eight categories, each with 10–40 accepted answers and regional variants. Import it like any other file. To re-date it for testing, set `QAFILA_FAKE_TODAY` in `.env.local` instead of editing dates.
 

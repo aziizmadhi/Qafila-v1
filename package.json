@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "test:db": "vitest run --config vitest.db.config.ts",
     "import": "tsx scripts/import.ts",
+    "import-vocabulary": "tsx scripts/import-vocabulary.ts",
     "export-unmatched": "tsx scripts/export-unmatched.ts",
     "rescore": "tsx scripts/rescore.ts",
     "finalize": "tsx scripts/finalize.ts",

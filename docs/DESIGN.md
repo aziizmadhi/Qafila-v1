@@ -14,6 +14,7 @@ This file records the decisions approved before implementation. Change it when a
 | D6 | Share card | Text only (Web Share API + clipboard), with an RLM mark so the emoji row reads right-to-left. |
 | D7 | Retries | A question stays open until the player's **first correct answer** or the deadline (30 s + 2 s grace, enforced on the server). Wrong answers shake the waterskin and are logged; the same answer again (after normalization) is not counted. At most one attempt per 400 ms and 25 distinct attempts per question. No time penalty for wrong answers. Only the first correct answer is the response and enters the rarity stats; the denominator is unchanged (every daily player who reached the question). |
 | D8 | Pacing | **Chained clocks, no pauses.** "انطلق" starts question 1 and returns all seven question texts (never answers). Each next question starts 3 s after the previous one ends (its first correct answer, or its displayed deadline); the server derives this from time alone, so moving on needs no request. Leaving mid-journey lets the remaining clocks run out: those questions are timeouts and count in the denominator like any other. |
+| D9 | Answer suggestions | Up to 4 names under the input after 2 characters, matched on prefixes with the answer normalizer and ordered by match quality, then alphabetically (never by popularity). The pool is **per category**: every canonical answer of every question in that category plus extra vocabulary, so it mixes right and wrong names and never depends on the current question. Only names are sent: no variants, no question link, no correctness flag, no frequency. Matching on variants is left for later. |
 
 ## Smaller defaults
 
@@ -24,6 +25,7 @@ This file records the decisions approved before implementation. Change it when a
 - **Unmatched log** is the `attempts` table (every distinct wrong attempt, kept matched against the current answers by re-matching), exported by `npm run export-unmatched`. Retroactive acceptance walks each player's attempts in order: the earliest one that now matches becomes their answer.
 - **Tier thresholds** live in `src/lib/tiers.ts`.
 - **Dunes emoji** in the share text is 🐪, not 🏜️: most platforms draw 🏜️ with a cactus, which doesn't belong in an Arabian desert. In-app tier icons are pixel art.
+- **Suggestion pools** include canonicals of every imported question in the category, future days too. Comparing the pool before and after an import shows which names were added; importing several days at a time and adding vocabulary dilutes this.
 - **Sprites** marked `"custom": true` in the manifest are never overwritten by `npm run sprites`.
 
 ## Tier bands (tuned on the seed)
