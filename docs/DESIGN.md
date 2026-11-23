@@ -13,11 +13,12 @@ This file records the decisions approved before implementation. Change it when a
 | D5 | Account conflict | Anonymous runs are merged into the existing account; if both played the same daily journey, the account's run is kept. |
 | D6 | Share card | Text only (Web Share API + clipboard), with an RLM mark so the emoji row reads right-to-left. |
 | D7 | Retries | A question stays open until the player's **first correct answer** or the deadline (30 s + 2 s grace, enforced on the server). Wrong answers shake the waterskin and are logged; the same answer again (after normalization) is not counted. At most one attempt per 400 ms and 25 distinct attempts per question. No time penalty for wrong answers. Only the first correct answer is the response and enters the rarity stats; the denominator is unchanged (every daily player who reached the question). |
+| D8 | Pacing | **Chained clocks, no pauses.** "انطلق" starts question 1 and returns all seven question texts (never answers). Each next question starts 3 s after the previous one ends (its first correct answer, or its displayed deadline); the server derives this from time alone, so moving on needs no request. Leaving mid-journey lets the remaining clocks run out: those questions are timeouts and count in the denominator like any other. |
 
 ## Smaller defaults
 
 - **Unlimited**: any past journey, any number of times, scored against that journey's stats; never touches stats, streak or best distance.
-- **Abandoned questions** time out on the server clock (30 s + 2 s grace). Unserved questions can be resumed the same day (plus a 15-minute grace after midnight).
+- **Abandoned journeys** run out on the server clock (D8): any request about the run, or the nightly finalize, closes questions whose time is up. A journey that was never begun can be started the same day (plus a 15-minute grace after midnight).
 - **Import** confirms after the dry-run diff (`--yes` skips the prompt). Removing an answer that responses already matched needs `--allow-removals`.
 - **Dev clock**: `QAFILA_FAKE_TODAY=YYYY-MM-DD` (ignored in production).
 - **Unmatched log** is the `attempts` table (every distinct wrong attempt, kept matched against the current answers by re-matching), exported by `npm run export-unmatched`. Retroactive acceptance walks each player's attempts in order: the earliest one that now matches becomes their answer.
@@ -51,6 +52,23 @@ score  = correct ? max(10, round(100 * (1 - share))) : 0
 
 ## Answer secrecy and timing
 
-- The client never reads content tables. Question text is released by `POST /api/runs/:id/next`, which stamps `served_at` once.
+- The client never reads content tables. All seven question texts and categories are released by `POST /api/runs/:id/begin`, which starts question 1's clock; nothing about answers is sent.
 - Accepted answers are only sent by `GET /api/runs/:id/results`, which refuses unfinished runs.
-- An answer later than `served_at + 32 s` counts as a timeout. When the player's clock runs out, `POST /api/runs/:id/timeout` closes the question (accepted from 1.5 s before the displayed deadline, for clock skew).
+- An answer later than `served_at + 32 s` (30 s + 2 s network grace) counts as a timeout. A question can't be answered more than 1.5 s before its clock starts (clock skew).
+- Timing lives in `src/lib/timing.ts` (browser and server) and in the SQL functions; the DB tests check they agree.
+
+## The answer hot path
+
+`POST /api/runs/:id/answer` makes **one database round trip**: the server normalizes the answer (TypeScript), then a single call to `game.submit()` (a PL/pgSQL function in the private `game` schema) applies the per-IP limit, catches up the chained clock, enforces the deadline and the retry limits, matches (exact key, then the one-edit fallback via `fuzzystrmatch`), logs the attempt, updates the rarity counters and the run, opens the next question, and returns the result.
+
+- Matching and scoring exist in SQL (hot path) and TypeScript (re-matching, rescoring, tests). `tests/db/parity.test.ts` runs every seed key plus thousands of one- and two-edit variations through both and requires identical results.
+- Parameters are sent with explicit types: with `prepare: false` (needed for Supabase's transaction pooler), postgres.js otherwise spends an extra round trip describing every parameterized query.
+- The `game` schema isn't exposed by the Data API and its functions aren't executable by `anon`/`authenticated`.
+
+Measured with `npm run bench:submit` (server time for the database work of one answer, Postgres behind a proxy that adds a fixed round-trip time):
+
+| Added RTT | Before (22 round trips) | After (1 round trip) |
+|---|---|---|
+| 0 ms | 3.9 ms | 2.0 ms |
+| 2 ms (same region) | 62 ms | 4.6 ms |
+| 150 ms (Washington ↔ Tokyo) | 3,337 ms | 154 ms |

@@ -7,25 +7,24 @@ import type {
   RunResults,
   RunState,
 } from "@/lib/api-types";
-import { matchAnswer } from "@/lib/matching";
 import { normalizeAnswer } from "@/lib/normalize";
 import { blendedShare, scoreAnswer } from "@/lib/scoring";
 import { QUESTIONS_PER_JOURNEY, answerTier } from "@/lib/tiers";
 import { addDays } from "@/lib/time";
+import { MAX_ATTEMPTS, MIN_ATTEMPT_GAP_MS, QUESTION_MS, TRANSITION_MS } from "@/lib/timing";
 import { transaction, type Db } from "@/server/db";
 import { DAY_GRACE_MS, finalizeIfDue, isPastGrace } from "@/server/scoring/finalize";
-import { ANSWER_WINDOW_MS, expireStaleResponses, loadMatchIndex } from "@/server/scoring/recompute";
 import { gameToday } from "./clock";
-import { errors } from "./errors";
+import { GameError, errors } from "./errors";
 
-/** What players see on the clock. The server allows ANSWER_WINDOW_MS (2 s more). */
-export const QUESTION_SECONDS = 30;
 export const MAX_ANSWER_CHARS = 120;
-/** Retries: at most one attempt per MIN_ATTEMPT_GAP_MS, MAX_ATTEMPTS distinct answers per question. */
-export const MIN_ATTEMPT_GAP_MS = 400;
-export const MAX_ATTEMPTS = 25;
-/** A client may close a question as timed out this long before the displayed deadline (clock skew). */
-const TIMEOUT_TOLERANCE_MS = 1500;
+/** Normalized answers are stored in columns limited to 200 characters. */
+const MAX_NORM_CHARS = 200;
+export { MAX_ATTEMPTS, MIN_ATTEMPT_GAP_MS };
+
+// Parameter types for postgres.js: typed parameters skip the extra "describe"
+// round trip it otherwise makes before every query when prepare is off (pooler).
+const OID = { int4: 23, text: 25, timestamptz: 1184, uuid: 2950 } as const;
 
 interface RunRow {
   id: string;
@@ -69,12 +68,15 @@ function dailyStillOpen(date: string, now: Date): boolean {
   return false;
 }
 
+/** Bring the run's chained clock up to `now` (see game.catch_up in the migrations). */
+async function catchUp(db: Db, runId: string, now: Date): Promise<void> {
+  await db`select game.catch_up(${runId}::uuid, ${now})`;
+}
+
 async function buildState(db: Db, run: RunRow, now = new Date()): Promise<RunState> {
   const rows = await db<
     {
       position: number;
-      category: string;
-      text: string;
       served_at: Date;
       match: string | null;
       raw_text: string | null;
@@ -83,31 +85,29 @@ async function buildState(db: Db, run: RunRow, now = new Date()): Promise<RunSta
       attempts: number;
     }[]
   >`
-    select r.position, q.category, q.text, r.served_at, r.match::text as match, r.raw_text, r.score,
-      a.canonical, r.attempts
+    select r.position, r.served_at, r.match::text as match, r.raw_text, r.score, a.canonical, r.attempts
     from responses r
-    join questions q on q.id = r.question_id
     left join answers a on a.id = r.answer_id and r.match in ('exact', 'fuzzy')
     where r.run_id = ${run.id}
     order by r.position`;
+  const questions = await db<{ position: number; category: string; text: string }[]>`
+    select position, category, text from questions where journey_id = ${run.journey_id} order by position`;
 
   const answered: AnsweredQuestion[] = [];
   let current: CurrentQuestion | null = null;
   for (const r of rows) {
+    const q = questions.find((x) => x.position === r.position);
     if (r.match === null) {
       current = {
         position: r.position,
-        text: r.text,
-        category: r.category,
         servedAt: r.served_at.toISOString(),
-        deadline: new Date(r.served_at.getTime() + QUESTION_SECONDS * 1000).toISOString(),
-        serverNow: now.toISOString(),
+        deadline: new Date(r.served_at.getTime() + QUESTION_MS).toISOString(),
         attempts: r.attempts,
       };
     } else {
       answered.push({
         position: r.position,
-        category: r.category,
+        category: q?.category ?? "",
         score: r.score,
         correct: r.match === "exact" || r.match === "fuzzy",
         timedOut: r.match === "timeout",
@@ -116,17 +116,21 @@ async function buildState(db: Db, run: RunRow, now = new Date()): Promise<RunSta
       });
     }
   }
-  const totalKm = answered.reduce((s, a) => s + a.score, 0);
+  const begun = rows.length > 0;
   return {
     id: run.id,
     mode: run.mode,
     date: run.date,
     journeyNumber: await journeyNumber(db, run.date, run.track),
-    totalKm,
+    totalKm: answered.reduce((s, a) => s + a.score, 0),
     finished: run.finished_at !== null || answered.length >= QUESTIONS_PER_JOURNEY,
     answered,
+    // Question texts are released when the journey begins (all seven at once); never answers.
+    questions: begun ? questions.map((q) => ({ position: q.position, category: q.category, text: q.text })) : null,
     current,
     questionCount: QUESTIONS_PER_JOURNEY,
+    serverNow: now.toISOString(),
+    timing: { questionMs: QUESTION_MS, transitionMs: TRANSITION_MS, minAttemptGapMs: MIN_ATTEMPT_GAP_MS },
   };
 }
 
@@ -172,89 +176,53 @@ export async function startRun(
 }
 
 export async function getRunState(db: Db, userId: string, runId: string, now = new Date()): Promise<RunState> {
-  await expireStaleResponses(db, { runId, now });
-  const run = await loadRun(db, userId, runId);
-  return buildState(db, run, now);
+  await loadRun(db, userId, runId); // ownership
+  await catchUp(db, runId, now);
+  return buildState(db, await loadRun(db, userId, runId), now);
 }
 
-/** Serve the next question and start its clock. Idempotent while a question is open. */
-export async function serveNext(db: Db, userId: string, runId: string, now = new Date()): Promise<RunState> {
+/**
+ * Begin the journey: start question 1's clock and release all seven question
+ * texts. From here the clock is chained (no pauses). Idempotent once begun.
+ */
+export async function beginRun(db: Db, userId: string, runId: string, now = new Date()): Promise<RunState> {
   await transaction(db, async (tx) => {
     const run = await loadRun(tx, userId, runId, true);
+    const [{ n } = { n: 0 }] = await tx<{ n: number }[]>`select count(*)::int as n from responses where run_id = ${runId}`;
+    if (n > 0) return; // already begun
     if (run.finished_at) throw errors.finished();
-    await expireStaleResponses(tx, { runId, now });
-
-    const [open] = await tx<{ id: string }[]>`
-      select id from responses where run_id = ${runId} and match is null`;
-    if (open) return; // already serving a question
-
-    const [{ n } = { n: 0 }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from responses where run_id = ${runId}`;
-    const position = n + 1;
-    if (position > QUESTIONS_PER_JOURNEY) {
-      await tx`update runs set finished_at = coalesce(finished_at, now()) where id = ${runId}`;
-      throw errors.finished();
-    }
     if (run.mode === "daily" && !dailyStillOpen(run.date, now)) {
-      await tx`update runs set finished_at = now() where id = ${runId}`;
+      await tx`update runs set finished_at = coalesce(finished_at, ${now}) where id = ${runId}`;
       throw errors.dayOver();
     }
     const [q] = await tx<{ id: string }[]>`
-      select id from questions where journey_id = ${run.journey_id} and position = ${position}`;
+      select id from questions where journey_id = ${run.journey_id} and position = 1`;
     if (!q) throw errors.noJourney();
     await tx`
       insert into responses (run_id, user_id, question_id, position, counts_for_stats, served_at)
-      values (${runId}, ${userId}, ${q.id}, ${position}, ${run.mode === "daily"}, ${now})`;
+      values (${runId}, ${userId}, ${q.id}, 1, ${run.mode === "daily"}, ${now})
+      on conflict (run_id, position) do nothing`;
   });
   return getRunState(db, userId, runId, now);
 }
 
-interface OpenResponse {
-  id: string;
-  question_id: string;
-  served_at: Date;
-  match: string | null;
-  counts_for_stats: boolean;
-  attempts: number;
-  last_attempt_at: Date | null;
-}
+const SUBMIT_ERRORS: Record<string, () => GameError> = {
+  not_found: errors.notFound,
+  not_served: errors.notServed,
+  already_answered: errors.alreadyAnswered,
+  too_fast: errors.tooFast,
+  too_many_attempts: errors.tooManyAttempts,
+  rate_limited: errors.rateLimited,
+};
 
-async function lockResponse(tx: Db, runId: string, position: number): Promise<OpenResponse> {
-  const [resp] = await tx<OpenResponse[]>`
-    select id, question_id, served_at, match::text as match, counts_for_stats, attempts, last_attempt_at
-    from responses where run_id = ${runId} and position = ${position}
-    for update`;
-  if (!resp) throw errors.notServed();
-  return resp;
-}
-
-/** Close an open question with no correct answer: 0 km, and it counts in the rarity denominator (D1). */
-async function closeAsTimeout(tx: Db, run: RunRow, resp: OpenResponse, position: number, now: Date): Promise<AnswerResult> {
-  await tx`update responses set match = 'timeout', answered_at = ${now}, score = 0 where id = ${resp.id}`;
-  if (resp.counts_for_stats) {
-    await tx`
-      insert into question_stats (question_id, live_total) values (${resp.question_id}, 1)
-      on conflict (question_id) do update set live_total = question_stats.live_total + 1`;
-  }
-  const finished = position >= QUESTIONS_PER_JOURNEY;
-  if (finished) await tx`update runs set finished_at = coalesce(finished_at, ${now}) where id = ${run.id}`;
-  return {
-    position,
-    correct: false,
-    timedOut: true,
-    score: 0,
-    tier: null,
-    matched: null,
-    totalKm: run.total_km,
-    finished,
-  };
-}
+type SubmitRow = Omit<AnswerResult, "tier" | "serverNow"> & { error?: string };
 
 /**
- * One attempt at the open question. Wrong answers are logged and the question
- * stays open; the first correct answer closes it, is scored and counted in the
- * rarity stats. After the deadline (+ grace) the question closes as a timeout.
- * Never reveals other accepted answers.
+ * One attempt at the open question, in a single database round trip
+ * (game.submit): the server normalizes, the database matches, records,
+ * scores and moves the chained clock. Wrong answers keep the question open;
+ * the first correct answer closes it and is the only one counted in the
+ * rarity stats. Never reveals other accepted answers.
  */
 export async function submitAnswer(
   db: Db,
@@ -263,130 +231,34 @@ export async function submitAnswer(
   position: number,
   rawInput: string,
   now = new Date(),
+  opts: { ipKey?: string | null; ipLimit?: number } = {},
 ): Promise<AnswerResult> {
   if (!Number.isInteger(position) || position < 1 || position > QUESTIONS_PER_JOURNEY) throw errors.badInput();
   const raw = (typeof rawInput === "string" ? rawInput : "").replace(/\s+/g, " ").trim().slice(0, MAX_ANSWER_CHARS);
   if (!raw) throw errors.badInput("اكتب إجابة أولًا.");
-  const norm = normalizeAnswer(raw);
+  const norm = Array.from(normalizeAnswer(raw)).slice(0, MAX_NORM_CHARS).join("");
 
-  return transaction(db, async (tx) => {
-    const run = await loadRun(tx, userId, runId, true);
-    const resp = await lockResponse(tx, runId, position);
-    if (resp.match !== null) throw errors.alreadyAnswered();
-
-    if (now.getTime() > resp.served_at.getTime() + ANSWER_WINDOW_MS) {
-      return closeAsTimeout(tx, run, resp, position, now);
-    }
-    if (resp.last_attempt_at && now.getTime() - resp.last_attempt_at.getTime() < MIN_ATTEMPT_GAP_MS) {
-      throw errors.tooFast();
-    }
-    if (resp.attempts >= MAX_ATTEMPTS) throw errors.tooManyAttempts();
-
-    const index = await loadMatchIndex(tx, resp.question_id);
-    const m = matchAnswer(norm, index);
-
-    if (!m) {
-      // Logged for review (export-unmatched); the same spelling twice is one attempt.
-      const inserted = await tx`
-        insert into attempts (response_id, question_id, raw_text, norm_text, created_at)
-        values (${resp.id}, ${resp.question_id}, ${raw}, ${norm}, ${now})
-        on conflict (response_id, norm_text) do nothing
-        returning id`;
-      const duplicate = inserted.length === 0;
-      const attempts = resp.attempts + (duplicate ? 0 : 1);
-      await tx`update responses set attempts = ${attempts}, last_attempt_at = ${now} where id = ${resp.id}`;
-      return {
-        position,
-        correct: false,
-        timedOut: false,
-        duplicate,
-        attemptsLeft: MAX_ATTEMPTS - attempts,
-        score: 0,
-        tier: null,
-        matched: null,
-        totalKm: run.total_km,
-        finished: false,
-      };
-    }
-
-    // First correct answer: live rarity counters (daily responses only).
-    let liveTotal = 0;
-    let liveCount = 0;
-    if (resp.counts_for_stats) {
-      const [qs] = await tx<{ live_total: number }[]>`
-        insert into question_stats (question_id, live_total) values (${resp.question_id}, 1)
-        on conflict (question_id) do update set live_total = question_stats.live_total + 1
-        returning live_total`;
-      liveTotal = qs!.live_total;
-      const [as] = await tx<{ live_count: number }[]>`
-        insert into answer_stats (answer_id, question_id, live_count) values (${m.answerId}, ${resp.question_id}, 1)
-        on conflict (answer_id) do update set live_count = answer_stats.live_count + 1
-        returning live_count`;
-      liveCount = as!.live_count;
-    } else {
-      const [s] = await tx<{ live_total: number; live_count: number }[]>`
-        select coalesce((select live_total from question_stats where question_id = ${resp.question_id}), 0) as live_total,
-               coalesce((select live_count from answer_stats where answer_id = ${m.answerId}), 0) as live_count`;
-      liveTotal = s!.live_total;
-      liveCount = s!.live_count;
-    }
-
-    const [a] = await tx<{ seed: number; canonical: string }[]>`
-      select seed_frequency::float8 as seed, canonical from answers where id = ${m.answerId}`;
-    const score = scoreAnswer({ correct: true, seedFrequency: a!.seed, liveCount, liveTotal });
-
-    await tx`
-      insert into attempts (response_id, question_id, raw_text, norm_text, answer_id, match, created_at)
-      values (${resp.id}, ${resp.question_id}, ${raw}, ${norm}, ${m.answerId}, ${m.kind}::match_kind, ${now})
-      on conflict (response_id, norm_text) do update set answer_id = excluded.answer_id, match = excluded.match`;
-    await tx`
-      update responses set answered_at = ${now}, raw_text = ${raw}, norm_text = ${norm},
-        answer_id = ${m.answerId}, match = ${m.kind}::match_kind, score = ${score},
-        attempts = least(attempts + 1, ${MAX_ATTEMPTS}), last_attempt_at = ${now}
-      where id = ${resp.id}`;
-    const finished = position >= QUESTIONS_PER_JOURNEY;
-    const [updated] = await tx<{ total_km: number }[]>`
-      update runs set total_km = total_km + ${score},
-        finished_at = case when ${finished} then coalesce(finished_at, ${now}) else finished_at end
-      where id = ${run.id}
-      returning total_km`;
-
-    return {
-      position,
-      correct: true,
-      timedOut: false,
-      score,
-      tier: answerTier(score)?.id ?? null,
-      matched: a!.canonical,
-      totalKm: updated!.total_km,
-      finished,
-    };
-  });
-}
-
-/**
- * The player's clock ran out: close the open question as a timeout. Accepted
- * from TIMEOUT_TOLERANCE_MS before the displayed deadline (client clock skew).
- */
-export async function closeTimedOut(
-  db: Db,
-  userId: string,
-  runId: string,
-  position: number,
-  now = new Date(),
-): Promise<AnswerResult> {
-  if (!Number.isInteger(position) || position < 1 || position > QUESTIONS_PER_JOURNEY) throw errors.badInput();
-  return transaction(db, async (tx) => {
-    const run = await loadRun(tx, userId, runId, true);
-    const resp = await lockResponse(tx, runId, position);
-    if (resp.match !== null) throw errors.alreadyAnswered();
-    if (now.getTime() < resp.served_at.getTime() + QUESTION_SECONDS * 1000 - TIMEOUT_TOLERANCE_MS) throw errors.notYet();
-    return closeAsTimeout(tx, run, resp, position, now);
-  });
+  const [row] = await db<{ r: SubmitRow }[]>`
+    select game.submit(
+      ${db.typed(userId, OID.uuid)}, ${db.typed(runId, OID.uuid)}, ${db.typed(String(position), OID.int4)},
+      ${db.typed(raw, OID.text)}, ${db.typed(norm, OID.text)}, ${db.typed(now.toISOString(), OID.timestamptz)},
+      ${db.typed(opts.ipKey ?? null, OID.text)}, ${db.typed(String(opts.ipLimit ?? 240), OID.int4)}
+    ) as r`;
+  const r = row?.r;
+  if (!r) throw new Error("game.submit returned nothing");
+  if (r.error) throw (SUBMIT_ERRORS[r.error] ?? errors.badInput)();
+  return {
+    ...r,
+    tier: r.correct ? (answerTier(r.score)?.id ?? null) : null,
+    next: r.next ? { position: r.next.position, servedAt: new Date(r.next.servedAt).toISOString() } : null,
+    serverNow: now.toISOString(),
+  };
 }
 
 /** Full reveal for a finished run: every accepted answer with its share of players. */
 export async function getResults(db: Db, userId: string, runId: string, now = new Date()): Promise<RunResults> {
+  await loadRun(db, userId, runId); // ownership
+  await catchUp(db, runId, now); // a run whose clocks ran out is finished
   let run = await loadRun(db, userId, runId);
   if (run.mode === "daily" && !run.finalized) {
     if (await finalizeIfDue(db, { id: run.journey_id, date: run.date, finalized: run.finalized }, now)) {

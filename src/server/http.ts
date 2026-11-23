@@ -21,15 +21,26 @@ export function errorResponse(e: unknown): NextResponse {
   );
 }
 
-/** Wrap a route handler: JSON errors, and a per-IP limit on every API call. */
+export const IP_LIMIT_PER_MINUTE = 240;
+
+/** The rate-limit key for a request's client IP (salted hash, never the IP itself). */
+export function ipKey(req: Request): string {
+  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0]?.trim() || req.headers.get("x-real-ip");
+  return `ip:${hashIp(ip)}`;
+}
+
+/**
+ * Wrap a route handler: JSON errors, and a per-IP limit on every API call.
+ * `ipLimitInHandler`: the handler applies the IP limit itself (the answer
+ * route does it inside its single database call).
+ */
 export function api<A extends unknown[]>(
   handler: (req: Request, ...rest: A) => Promise<NextResponse>,
-  opts: { ipLimitPerMinute?: number } = {},
+  opts: { ipLimitPerMinute?: number; ipLimitInHandler?: boolean } = {},
 ) {
   return async (req: Request, ...rest: A): Promise<NextResponse> => {
     try {
-      const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0]?.trim() || req.headers.get("x-real-ip");
-      await rateLimit(getDb(), `ip:${hashIp(ip)}`, opts.ipLimitPerMinute ?? 240);
+      if (!opts.ipLimitInHandler) await rateLimit(getDb(), ipKey(req), opts.ipLimitPerMinute ?? IP_LIMIT_PER_MINUTE);
       return await handler(req, ...rest);
     } catch (e) {
       return errorResponse(e);

@@ -19,7 +19,8 @@
     "export-unmatched": "tsx scripts/export-unmatched.ts",
     "rescore": "tsx scripts/rescore.ts",
     "finalize": "tsx scripts/finalize.ts",
-    "sprites": "tsx scripts/sprites/generate.ts"
+    "sprites": "tsx scripts/sprites/generate.ts",
+    "bench:submit": "tsx scripts/bench/submit.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

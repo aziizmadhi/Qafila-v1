@@ -1,9 +1,7 @@
 import { buildIndex, matchAnswer, type MatchIndex } from "@/lib/matching";
 import { scoreAnswer } from "@/lib/scoring";
+import { ANSWER_WINDOW_MS, TRANSITION_MS } from "@/lib/timing";
 import type { Db } from "@/server/db";
-
-/** Answers later than this after `served_at` are timeouts (30 s + 2 s network grace). */
-export const ANSWER_WINDOW_MS = 32_000;
 
 export async function loadMatchIndex(db: Db, questionId: string): Promise<MatchIndex> {
   const rows = await db<{ key: string; answer_id: string }[]>`
@@ -186,45 +184,19 @@ export async function recomputeQuestion(db: Db, questionId: string): Promise<Rec
   return { liveTotal: total, rescored };
 }
 
-/** Close every served-but-unanswered response of a run whose clock ran out. */
-export async function expireStaleResponses(db: Db, opts: { runId?: string; journeyId?: string; now?: Date }): Promise<number> {
-  const now = opts.now ?? new Date();
-  const cutoff = new Date(now.getTime() - ANSWER_WINDOW_MS);
-  const rows = await db<{ question_id: string; counts_for_stats: boolean }[]>`
-    update responses r
-    set match = 'timeout', answered_at = r.served_at + interval '32 seconds', score = 0
-    where r.match is null and r.served_at < ${cutoff}
-      ${opts.runId ? db`and r.run_id = ${opts.runId}` : db``}
-      ${opts.journeyId ? db`and r.run_id in (select id from runs where journey_id = ${opts.journeyId})` : db``}
-    returning r.question_id, r.counts_for_stats`;
-  // A timeout is a daily response too: it counts in the rarity denominator.
-  const perQuestion = new Map<string, number>();
-  for (const r of rows) if (r.counts_for_stats) perQuestion.set(r.question_id, (perQuestion.get(r.question_id) ?? 0) + 1);
-  for (const [qid, n] of perQuestion) {
-    await db`
-      insert into question_stats (question_id, live_total) values (${qid}, ${n})
-      on conflict (question_id) do update set live_total = question_stats.live_total + ${n}`;
-  }
-  if (rows.length > 0) {
-    await db`
-      update runs set finished_at = coalesce(finished_at, now())
-      where id in (
-        select r.id from runs r
-        where r.finished_at is null
-          ${opts.runId ? db`and r.id = ${opts.runId}` : db``}
-          ${opts.journeyId ? db`and r.journey_id = ${opts.journeyId}` : db``}
-          and (select count(*) from responses x where x.run_id = r.id and x.match is not null) >= 7
-      )`;
-  }
-  return rows.length;
-}
-
 /**
- * Make a past day's scores final (D2): close open questions, recompute every
- * question with the final counts, close unfinished daily runs.
+ * Make a past day's scores final (D2): run out every open clock, recompute
+ * every question with the final counts, close unfinished daily runs.
  */
 export async function finalizeJourney(db: Db, journeyId: string, now: Date = new Date()): Promise<{ questions: number }> {
-  await expireStaleResponses(db, { journeyId, now: new Date(now.getTime() + ANSWER_WINDOW_MS) });
+  // Run every begun journey's chained clock to its end: questions a player
+  // never answered (they left mid-journey) close as timeouts.
+  const runOut = new Date(now.getTime() + 7 * (ANSWER_WINDOW_MS + TRANSITION_MS));
+  await db`
+    select game.catch_up(r.id, ${runOut})
+    from runs r
+    where r.journey_id = ${journeyId} and r.finished_at is null
+      and exists (select 1 from responses x where x.run_id = r.id)`;
   const questions = await db<{ id: string }[]>`select id from questions where journey_id = ${journeyId} order by position`;
   for (const q of questions) await recomputeQuestion(db, q.id);
   await db`

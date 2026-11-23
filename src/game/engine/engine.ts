@@ -26,6 +26,8 @@ import type { TierId } from "@/lib/tiers";
 const TINTS = [0xd8a8b0, 0xf2dcc8, 0xffffff, 0xffffff, 0xfff0d8, 0xffcf9c, 0xc89aa8, 0x5c5a8e];
 /** Art pixels per km: a 100-km answer scrolls the world ~160 px (about a phone screen). */
 const PX_PER_KM = 1.6;
+/** The caravan always arrives within this many seconds (the next question starts 3 s after an answer). */
+const TRAVEL_MAX_S = 2.6;
 const SAND = 0xe0a565;
 const HOUR_SECONDS = 1.6;
 
@@ -483,7 +485,8 @@ export class Engine implements SceneController {
       }
       const rare = tier === "oasis" || tier === "star";
       const base = rare ? 72 : tier === "mirage" ? 44 : 30;
-      const speed = Math.max(base, dist / 3.4);
+      // Long trips speed up so the walk fits the pause between questions (TRANSITION_MS).
+      const speed = Math.max(base, dist / TRAVEL_MAX_S);
       this.setCaravan(rare ? "run" : "walk", rare ? 1 : tier === "mirage" ? 1 : 0.75);
       this.trip = { remaining: dist, speed, tier, resolve, dustTimer: 0 };
     });
