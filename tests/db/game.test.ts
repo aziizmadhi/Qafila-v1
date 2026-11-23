@@ -131,6 +131,7 @@ describe("unlimited", () => {
 
 describe("finalize, profile and merge", () => {
   it("finalizes past days and closes their open runs", async () => {
+    process.env.QAFILA_FAKE_TODAY = "2026-11-21";
     const done = await finalizeDueJourneys(t.db, at("2026-11-20T21:20:00Z"));
     expect(done).toEqual(["2026-11-19", "2026-11-20"]);
     const again = await finalizeDueJourneys(t.db, at("2026-11-20T21:30:00Z"));
@@ -162,5 +163,16 @@ describe("finalize, profile and merge", () => {
     expect(kept.map((k) => k.total_km)).toEqual([300, 500]);
     // A ticket works once.
     expect(await mergeFromTicket(t.db, ticket, account)).toEqual({ moved: 0, skipped: 0 });
+  });
+});
+
+describe("grace period (real clock)", () => {
+  it("keeps yesterday open for 15 minutes after midnight Riyadh", async () => {
+    const { isPastGrace } = await import("@/server/scoring/finalize");
+    delete process.env.QAFILA_FAKE_TODAY;
+    expect(isPastGrace("2026-11-20", at("2026-11-20T21:10:00Z"))).toBe(false); // 00:10 Riyadh
+    expect(isPastGrace("2026-11-20", at("2026-11-20T21:16:00Z"))).toBe(true); // 00:16 Riyadh
+    expect(isPastGrace("2026-11-20", at("2026-11-20T12:00:00Z"))).toBe(false); // same day
+    expect(isPastGrace("2026-11-18", at("2026-11-20T12:00:00Z"))).toBe(true);
   });
 });

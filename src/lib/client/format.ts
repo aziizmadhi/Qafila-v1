@@ -28,6 +28,7 @@ export function formatCountdown(ms: number): string {
 }
 
 export function pluralDays(n: number): string {
+  if (n === 0) return "0 يوم";
   if (n === 1) return "يوم واحد";
   if (n === 2) return "يومان";
   if (n >= 3 && n <= 10) return `${n} أيام`;

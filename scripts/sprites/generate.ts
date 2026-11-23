@@ -10,7 +10,7 @@
  * manifest entry if the frame size, count or fps changed. No code changes.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { camelFrames } from "./camel";
 import { C, PALETTE, Pix, bayer, strip } from "./canvas";
@@ -64,12 +64,25 @@ interface Entry {
   anchor?: [number, number];
   tile?: "x";
   parallax?: number;
+  custom?: boolean;
 }
 
 const sprites: Record<string, Entry> = {};
+// Entries marked "custom": true in the existing manifest are real art: keep them untouched.
+const previous: { sprites?: Record<string, Entry> } = existsSync(join(OUT, "manifest.json"))
+  ? JSON.parse(readFileSync(join(OUT, "manifest.json"), "utf8"))
+  : {};
+const kept: string[] = [];
 const hash = createHash("sha256");
 
 function write(name: string, frames: Pix[], meta: Omit<Entry, "file" | "frameWidth" | "frameHeight" | "frames">) {
+  const old = previous.sprites?.[name];
+  if (old?.custom) {
+    sprites[name] = old;
+    if (existsSync(join(OUT, old.file))) hash.update(readFileSync(join(OUT, old.file)));
+    kept.push(name);
+    return;
+  }
   const sheet = strip(frames);
   const buf = sheet.toPNG();
   hash.update(buf);
@@ -136,6 +149,14 @@ write("ui_button", [buttonPrimary()], { fps: 0 });
 write("ui_button_pressed", [buttonPressed()], { fps: 0 });
 write("ui_button_secondary", [buttonSecondary()], { fps: 0 });
 
+for (const [name, entry] of Object.entries(previous.sprites ?? {})) {
+  // Extra hand-made sprites that the generator doesn't know about.
+  if (entry.custom && !sprites[name]) {
+    sprites[name] = entry;
+    kept.push(name);
+  }
+}
+
 const manifest = {
   version: 1,
   baseGrid: 32,
@@ -174,4 +195,5 @@ for (let y = 0; y < 180; y++) for (let x = 0; x < 180; x++) appleCropped.set(x, 
 writeFileSync(join(ICONS, "apple-touch-icon.png"), appleCropped.toPNG());
 writeFileSync(join(process.cwd(), "src", "app", "icon.png"), icon.scaled(1).toPNG());
 
-console.log(`✔ ${Object.keys(sprites).length} sprites → public/sprites (build ${manifest.build}), icons → public/icons`);
+console.log(`✔ ${Object.keys(sprites).length - kept.length} sprites → public/sprites (build ${manifest.build}), icons → public/icons`);
+if (kept.length) console.log(`  kept custom art: ${kept.join(", ")}`);

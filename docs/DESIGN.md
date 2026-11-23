@@ -21,6 +21,8 @@ This file records the decisions approved before implementation. Change it when a
 - **Dev clock**: `QAFILA_FAKE_TODAY=YYYY-MM-DD` (ignored in production).
 - **Unmatched log** is derived from `responses` (match = none) by `npm run export-unmatched`, so retroactive acceptance can never leave it out of sync.
 - **Tier thresholds** live in `src/lib/tiers.ts`.
+- **Dunes emoji** in the share text is 🐪, not 🏜️: most platforms draw 🏜️ with a cactus, which doesn't belong in an Arabian desert. In-app tier icons are pixel art.
+- **Sprites** marked `"custom": true` in the manifest are never overwritten by `npm run sprites`.
 
 ## Tier bands (tuned on the seed)
 

@@ -1,20 +1,28 @@
 import { addDays, riyadhMidnight } from "@/lib/time";
 import { transaction, type Db } from "@/server/db";
+import { gameToday } from "@/server/game/clock";
 import { finalizeJourney } from "./recompute";
 
 /** A daily run started before midnight may be finished during this grace period. */
 export const DAY_GRACE_MS = 15 * 60 * 1000;
 
-/** True once a journey's day (plus grace) is over and its scores can be made final. */
+/**
+ * True once a journey's day (plus grace) is over and its scores can be made
+ * final. Uses the game clock, so QAFILA_FAKE_TODAY behaves consistently in dev.
+ */
 export function isPastGrace(playDate: string, now: Date): boolean {
-  return now.getTime() >= riyadhMidnight(addDays(playDate, 1)).getTime() + DAY_GRACE_MS;
+  const today = gameToday(now);
+  if (playDate >= today) return false;
+  if (addDays(playDate, 1) < today) return true;
+  if (process.env.QAFILA_FAKE_TODAY && process.env.NODE_ENV !== "production") return true;
+  return now.getTime() >= riyadhMidnight(today).getTime() + DAY_GRACE_MS;
 }
 
 /** Finalize every journey whose day is over. Idempotent; safe to call from cron and lazily. */
 export async function finalizeDueJourneys(db: Db, now: Date = new Date()): Promise<string[]> {
   const due = await db<{ id: string; date: string }[]>`
     select id, play_date::text as date from journeys
-    where finalized_at is null and play_date < ${addDays(now.toISOString().slice(0, 10), 1)}
+    where finalized_at is null and play_date < ${gameToday(now)}
     order by play_date`;
   const done: string[] = [];
   for (const j of due) {

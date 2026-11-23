@@ -21,6 +21,8 @@ export interface SpriteSheet {
   tile?: "x";
   /** Parallax factor relative to the ground (1 = moves with the caravan). */
   parallax?: number;
+  /** Hand-made art: `npm run sprites` will not overwrite this file or entry. */
+  custom?: boolean;
 }
 
 export interface SpriteManifest {
